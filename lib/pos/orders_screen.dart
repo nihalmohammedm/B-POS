@@ -1,0 +1,285 @@
+import 'package:flutter/material.dart';
+import '../models.dart';
+import '../store.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+import '../widgets/receipt.dart';
+import 'payment.dart';
+
+class OrdersScreen extends StatefulWidget {
+  final void Function(Order) onAddItems;
+  const OrdersScreen({super.key, required this.onAddItems});
+  @override
+  State<OrdersScreen> createState() => _OrdersScreenState();
+}
+
+class _OrdersScreenState extends State<OrdersScreen> {
+  OrderType? typeF;
+  String q = '';
+  int? selId;
+
+  bool _match(Order o) {
+    final x = q.trim().toLowerCase();
+    if (x.isEmpty) return true;
+    return ['${o.id}', o.token, o.customer, o.phone, o.tableId ?? ''].any((v) => v.toLowerCase().contains(x));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = StoreScope.of(context);
+    final all = s.activeOrders;
+    final list = all.where((o) => (typeF == null || o.type == typeF) && _match(o)).toList();
+    Order? sel;
+    for (final o in list) {
+      if (o.id == selId) sel = o;
+    }
+    sel ??= list.isEmpty ? null : list.first;
+    int count(OrderType? t) => all.where((o) => t == null || o.type == t).length;
+
+    return LayoutBuilder(builder: (c, cons) {
+      final wide = cons.maxWidth >= 980;
+      final pane = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          Seg<OrderType?>(
+            height: 44,
+            fontSize: 15,
+            items: [
+              (null, 'All ${count(null)}'),
+              (OrderType.dineIn, 'Dine in ${count(OrderType.dineIn)}'),
+              (OrderType.takeaway, 'Takeaway ${count(OrderType.takeaway)}'),
+              (OrderType.delivery, 'Delivery ${count(OrderType.delivery)}'),
+            ],
+            value: typeF,
+            onChanged: (v) => setState(() => typeF = v),
+          ),
+          SizedBox(
+            width: 260,
+            child: TextField(
+              onChanged: (v) => setState(() => q = v),
+              decoration: const InputDecoration(hintText: 'Search orders', prefixIcon: Icon(Icons.search, size: 20)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 16),
+        Expanded(
+          child: Panel(
+            padding: EdgeInsets.zero,
+            child: list.isEmpty
+                ? Center(child: Text('No ongoing orders', style: ts(15, c: C.muted)))
+                : ListView.separated(
+                    itemCount: list.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (c, i) => _row(s, list[i], sel?.id == list[i].id, wide),
+                  ),
+          ),
+        ),
+      ]);
+      if (!wide) return pane;
+      return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Expanded(child: pane),
+        const SizedBox(width: 20),
+        SizedBox(
+            width: 380,
+            child: sel == null ? const SizedBox() : OrderDetail(key: ValueKey(sel.id), orderId: sel.id, onAddItems: widget.onAddItems)),
+      ]);
+    });
+  }
+
+  Widget _row(Store s, Order o, bool on, bool wide) {
+    final st = s.stageOf(o);
+    final m = minsSince(o.at);
+    final late = m >= 30;
+    return InkWell(
+      onTap: () {
+        setState(() => selId = o.id);
+        if (!wide) {
+          showPanelDialog(context,
+              maxWidth: 440,
+              builder: (ctx) => SizedBox(
+                  height: MediaQuery.of(ctx).size.height * .85,
+                  child: OrderDetail(
+                      orderId: o.id,
+                      onAddItems: (x) {
+                        Navigator.pop(ctx);
+                        widget.onAddItems(x);
+                      })));
+        }
+      },
+      child: Container(
+        color: on ? const Color(0xFFF7F9FC) : Colors.white,
+        padding: const EdgeInsets.fromLTRB(16, 14, 20, 14),
+        child: Row(children: [
+          Container(
+              width: 4,
+              height: 40,
+              decoration: BoxDecoration(color: on ? typeColor(o.type) : Colors.transparent, borderRadius: BorderRadius.circular(4))),
+          const SizedBox(width: 14),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(s.titleOf(o), maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(16, w: w5)),
+            const SizedBox(height: 2),
+            Text('${o.type.label} · ${o.type == OrderType.dineIn ? '#${o.id}' : o.token}', style: ts(13, c: C.muted)),
+          ])),
+          SizedBox(
+            width: 150,
+            child: Row(children: [
+              Dot(color: stageColor(st)),
+              const SizedBox(width: 7),
+              Flexible(child: Text(st.label, overflow: TextOverflow.ellipsis, style: ts(14, c: C.ink2))),
+            ]),
+          ),
+          SizedBox(
+              width: 56,
+              child: Text('${m}m', textAlign: TextAlign.right, style: ts(14, c: late ? C.redInk : C.muted, w: late ? w6 : FontWeight.w400))),
+          SizedBox(width: 84, child: Text(inr(o.total), textAlign: TextAlign.right, style: ts(15, w: w5))),
+        ]),
+      ),
+    );
+  }
+}
+
+class OrderDetail extends StatelessWidget {
+  final int orderId;
+  final void Function(Order) onAddItems;
+  const OrderDetail({super.key, required this.orderId, required this.onAddItems});
+
+  static const flows = {
+    OrderType.dineIn: [OrderStage.preparing, OrderStage.served, OrderStage.billing],
+    OrderType.takeaway: [OrderStage.preparing, OrderStage.ready],
+    OrderType.delivery: [OrderStage.preparing, OrderStage.ready, OrderStage.outForDelivery],
+  };
+
+  (String, VoidCallback) _primary(BuildContext context, Store s, Order o, OrderStage st) {
+    if (o.type == OrderType.dineIn) {
+      if (st == OrderStage.billing) return ('Settle payment', () => settleFlow(context, o));
+      if (st == OrderStage.served) return ('Print bill', () => printBillFlow(context, o));
+      return ('Mark served', () => s.markServed(o));
+    }
+    if (o.type == OrderType.takeaway) {
+      if (st == OrderStage.ready) return (o.isPaid ? 'Hand over' : 'Settle & hand over', () => settleFlow(context, o));
+      return ('Mark ready', () => s.markReady(o));
+    }
+    if (st == OrderStage.outForDelivery) return ('Mark delivered', () => settleFlow(context, o));
+    if (st == OrderStage.ready) return ('Dispatch with rider', () => s.dispatch(o));
+    return ('Mark ready', () => s.markReady(o));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = StoreScope.of(context);
+    final o = s.orderById(orderId);
+    if (o == null) return Panel(child: Center(child: Text('Order closed', style: ts(15, c: C.muted))));
+    final st = s.stageOf(o);
+    final flow = flows[o.type]!;
+    final idx = flow.indexOf(st) < 0 ? 0 : flow.indexOf(st);
+    final sub = o.type == OrderType.dineIn
+        ? '${o.pax} guests · ${o.server}'
+        : o.type == OrderType.delivery
+            ? '${o.address}${o.rider != null ? ' · Rider ${o.rider}' : ''}'
+            : o.phone;
+    final (label, action) = _primary(context, s, o, st);
+    final kot = s.lastKot(o);
+
+    return Panel(
+      padding: EdgeInsets.zero,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${o.type.label} · ${o.type == OrderType.dineIn ? '#${o.id}' : o.token} · ${elapsed(o.at)}',
+                style: ts(13, c: C.muted)),
+            const SizedBox(height: 4),
+            Text(s.titleOf(o), style: ts(22, w: w5)),
+            if (sub.isNotEmpty) Text(sub, style: ts(14, c: C.ink2, h: 1.4)),
+            const SizedBox(height: 14),
+            Row(children: [
+              for (var i = 0; i < flow.length; i++) ...[
+                if (i > 0) const SizedBox(width: 4),
+                Expanded(
+                    child: Container(
+                        height: 4,
+                        decoration: BoxDecoration(
+                            color: i <= idx ? typeColor(o.type) : const Color(0xFFECECEC), borderRadius: BorderRadius.circular(4)))),
+              ],
+            ]),
+            const SizedBox(height: 8),
+            Text(st.label, style: ts(14, w: w5)),
+          ]),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8), children: [
+            for (final l in o.lines)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 30, child: Text('${l.qty}×', style: ts(14, c: C.muted))),
+                  Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(l.item.name, style: ts(15)),
+                    if (l.optText.isNotEmpty) Text(l.optText, style: ts(13, c: C.muted)),
+                    Text(l.state.label, style: ts(12, c: lineStateColors(l.state).$2)),
+                  ])),
+                  Text(inr(l.total), style: ts(15)),
+                ]),
+              ),
+          ]),
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              Expanded(child: Text(o.billed ? 'Bill ${o.billNo} · unpaid' : o.payNote, style: ts(14, c: C.ink2))),
+              Text(inr(o.total), style: ts(22, w: w6)),
+            ]),
+            const SizedBox(height: 14),
+            Row(children: [
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                onSelected: (v) {
+                  switch (v) {
+                    case 'add':
+                      onAddItems(o);
+                    case 'kot':
+                      if (kot != null) {
+                        showPrintPreview(context,
+                            kot: ReceiptData.kot(s, o, kot, reprint: true), bill: ReceiptData.bill(s, o), subtitle: '${s.titleOf(o)} · reprint');
+                      }
+                    case 'bill':
+                      printBillFlow(context, o);
+                    case 'reopen':
+                      reopenFlow(context, o);
+                    case 'cancel':
+                      {
+                        final title = s.titleOf(o);
+                        if (s.cancel(o)) toast(context, '$title cancelled');
+                      }
+                  }
+                },
+                itemBuilder: (_) => [
+                  if (!o.billed && o.type != OrderType.delivery) const PopupMenuItem(value: 'add', child: Text('Add items')),
+                  if (kot != null) const PopupMenuItem(value: 'kot', child: Text('Reprint KOT')),
+                  const PopupMenuItem(value: 'bill', child: Text('Print bill')),
+                  if (o.billed) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
+                  PopupMenuItem(
+                      value: 'cancel',
+                      enabled: s.canCancel(o),
+                      child: Text('Cancel order', style: TextStyle(color: s.canCancel(o) ? C.redInk : C.faint))),
+                ],
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: C.line)),
+                  child: const Icon(Icons.more_horiz),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Btn(label, expand: true, onTap: action)),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+}

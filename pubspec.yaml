@@ -8,9 +8,11 @@ environment:
 
 dependencies:
   connectivity_plus: ^7.3.1
+  crypto: ^3.0.6
   drift: ^2.35.0
   flutter:
     sdk: flutter
+  flutter_secure_storage: ^11.2.0
   http: ^1.6.0
   path: ^1.9.1
   path_provider: ^2.1.6
@@ -29,8 +31,23 @@ dev_dependencies:
 # usb_serial 0.5.2 (pulled in transitively by unified_esc_pos_printer for
 # Android USB OTG support) ships an android/build.gradle that's incompatible
 # with this project's AGP 9 / Gradle 9 toolchain (jcenter() + a per-module
-# buildscript classpath). Overridden to a locally vendored, patched copy —
-# see third_party/usb_serial/android/build.gradle for what changed.
+# buildscript classpath), and separately declares a compileSdkVersion below
+# what its own androidx dependencies require. Overridden to a locally
+# vendored, patched copy — see third_party/usb_serial/android/build.gradle.
+#
+# unified_esc_pos_printer 3.4.0 itself declares compileSdk 34, which is below
+# what its own network_info_plus dependency (8.2.1) requires (36+). Overridden
+# to a locally vendored copy with only that one line changed — see
+# third_party/unified_esc_pos_printer/android/build.gradle.kts.
+#
+# network_info_plus is pinned here too: adding flutter_secure_storage otherwise
+# lets the resolver settle on 7.0.0, whose Android plugin class layout doesn't
+# match what GeneratedPluginRegistrant expects (build fails with
+# "cannot find symbol NetworkInfoPlusPlugin"). 8.2.1 is the version the
+# compileSdk-36 pin above was written for.
 dependency_overrides:
   usb_serial:
     path: third_party/usb_serial
+  unified_esc_pos_printer:
+    path: third_party/unified_esc_pos_printer
+  network_info_plus: ^8.2.1

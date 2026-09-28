@@ -5,8 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.bistro_pos"
-    compileSdk = flutter.compileSdkVersion
+    // Neutral build namespace shared by both flavors — Android still requires one
+    // even though pos/captain each ship under their own real applicationId below.
+    namespace = "com.bpos.app"
+    // network_info_plus (pulled in transitively by unified_esc_pos_printer, for LAN
+    // printer subnet scanning) requires compileSdk 36+; Flutter's own default here
+    // (flutter.compileSdkVersion) currently resolves lower, so it's pinned explicitly.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -14,9 +19,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    buildFeatures {
+        resValues = true
+    }
+
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.bistro_pos"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -27,6 +34,23 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    // Two installable apps from one codebase: BPOS (Main POS, -t lib/main_pos.dart)
+    // and BPOS Captain (-t lib/main_captain.dart). Different applicationId means
+    // they can be installed side by side on the same device.
+    flavorDimensions += "app"
+    productFlavors {
+        create("pos") {
+            dimension = "app"
+            applicationId = "com.bpos.app"
+            resValue("string", "app_name", "BPOS")
+        }
+        create("captain") {
+            dimension = "app"
+            applicationId = "com.bpos.captain"
+            resValue("string", "app_name", "BPOS Captain")
+        }
     }
 
     buildTypes {

@@ -19,7 +19,7 @@
     <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
 
     <application
-        android:label="bistro_pos"
+        android:label="@string/app_name"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

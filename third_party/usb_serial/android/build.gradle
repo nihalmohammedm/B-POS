@@ -31,7 +31,10 @@ rootProject.allprojects {
 }
 
 android {
-    compileSdkVersion 33
+    // Bumped from the upstream 33: this module's own androidx dependencies
+    // (fragment, activity, lifecycle-*, core-ktx, etc.) require compileSdk 34+
+    // from anything that depends on them, including this module itself.
+    compileSdkVersion 36
 
     namespace 'dev.bessems.usbserial'
 

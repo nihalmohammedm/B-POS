@@ -13,6 +13,48 @@ class Store extends ChangeNotifier {
     _loadPersisted();
   }
 
+  // ---------- signed-in session (BPOS only; Captain stays unauthenticated) ----------
+  String? authUserId;
+  String? sessionEmail;
+  String? sessionFullName;
+  String? sessionAccessToken;
+  String? roleCode;
+  String? roleName;
+  Set<String> permissions = {};
+
+  bool get isSignedIn => authUserId != null;
+  bool can(String permission) => permissions.contains(permission);
+
+  void applySession({
+    required String authUserId,
+    required String email,
+    required String fullName,
+    required String accessToken,
+    required String roleCode,
+    required String roleName,
+    required Set<String> permissions,
+  }) {
+    this.authUserId = authUserId;
+    sessionEmail = email;
+    sessionFullName = fullName;
+    sessionAccessToken = accessToken;
+    this.roleCode = roleCode;
+    this.roleName = roleName;
+    this.permissions = permissions;
+    notifyListeners();
+  }
+
+  void clearSession() {
+    authUserId = null;
+    sessionEmail = null;
+    sessionFullName = null;
+    sessionAccessToken = null;
+    roleCode = null;
+    roleName = null;
+    permissions = {};
+    notifyListeners();
+  }
+
   List<String> categories = [];
   List<String> get floors => {for (final t in tables) t.floor}.toList()..sort();
 

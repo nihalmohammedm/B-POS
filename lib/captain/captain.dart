@@ -6,7 +6,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/receipt.dart';
 
-const _captain = 'Arjun P.';
+const _captain = 'Captain';
 
 /// Hosts the captain app in its own navigator. On wide screens it is shown in a phone-sized frame.
 class CaptainFrame extends StatelessWidget {
@@ -43,7 +43,7 @@ class CaptainHome extends StatefulWidget {
 
 class _CaptainHomeState extends State<CaptainHome> {
   bool takeaway = false;
-  String floor = 'Main hall';
+  String? floor;
 
   void _push(Order o) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CaptainOrderScreen(order: o)));
 
@@ -68,6 +68,8 @@ class _CaptainHomeState extends State<CaptainHome> {
   @override
   Widget build(BuildContext context) {
     final s = StoreScope.of(context);
+    final floors = s.floors;
+    if (floor == null || !floors.contains(floor)) floor = floors.isEmpty ? null : floors.first;
     final runningDine = s.tables.where((t) => t.parties.isNotEmpty).length;
     final ta = s.activeOrders.where((o) => o.type == OrderType.takeaway).toList();
     final active = s.tables.fold<int>(0, (a, t) => a + t.parties.length) + ta.length;
@@ -82,11 +84,11 @@ class _CaptainHomeState extends State<CaptainHome> {
                 const CircleAvatar(
                     radius: 22,
                     backgroundColor: Color(0xFFFFD9A8),
-                    child: Text('AP', style: TextStyle(color: Color(0xFF7A4A0C), fontWeight: w5))),
+                    child: Icon(Icons.person_outline, color: Color(0xFF7A4A0C))),
                 const SizedBox(width: 12),
                 Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Captain · Bistro 21', style: ts(13, c: C.muted)),
+                  Text('Captain · ${s.outletName.isEmpty ? 'Loading…' : s.outletName}', style: ts(13, c: C.muted)),
                   Text(_captain, style: ts(20, w: w5)),
                 ])),
                 Pill('$active active',
@@ -101,12 +103,12 @@ class _CaptainHomeState extends State<CaptainHome> {
                 const SizedBox(width: 8),
                 Expanded(child: _homeTab('Takeaway', '${ta.length} running', takeaway, C.purple, () => setState(() => takeaway = true))),
               ]),
-              if (!takeaway) ...[
+              if (!takeaway && floors.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Seg<String>(
                     expand: true,
-                    items: [for (final f in Store.floors) (f, f)],
-                    value: floor,
+                    items: [for (final f in floors) (f, f)],
+                    value: floor!,
                     onChanged: (v) => setState(() => floor = v)),
               ],
             ]),
@@ -136,15 +138,22 @@ class _CaptainHomeState extends State<CaptainHome> {
         ),
       );
 
-  Widget _grid(Store s) => ListView(padding: const EdgeInsets.fromLTRB(18, 4, 18, 40), children: [
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3, mainAxisExtent: 112, crossAxisSpacing: 10, mainAxisSpacing: 10),
-          itemCount: s.tablesOn(floor).length,
-          itemBuilder: (c, i) => _tableTile(s, s.tablesOn(floor)[i]),
-        ),
+  Widget _grid(Store s) {
+    final onFloor = floor == null ? const <TableModel>[] : s.tablesOn(floor!);
+    return ListView(padding: const EdgeInsets.fromLTRB(18, 4, 18, 40), children: [
+        if (onFloor.isEmpty)
+          Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(child: Text('No tables set up yet', style: ts(14, c: C.muted))))
+        else
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3, mainAxisExtent: 112, crossAxisSpacing: 10, mainAxisSpacing: 10),
+            itemCount: onFloor.length,
+            itemBuilder: (c, i) => _tableTile(s, onFloor[i]),
+          ),
         const SizedBox(height: 18),
         Wrap(alignment: WrapAlignment.center, spacing: 14, runSpacing: 6, children: [
           for (final (l, bg, border) in const [
@@ -164,6 +173,7 @@ class _CaptainHomeState extends State<CaptainHome> {
             ]),
         ]),
       ]);
+  }
 
   Widget _tableTile(Store s, TableModel t) {
     final ps = t.parties;

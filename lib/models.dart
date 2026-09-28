@@ -145,6 +145,9 @@ class OrderLine {
   String note;
   LineState state;
   int? kotNo;
+  /// The per-unit price at the moment this line was created — captured once, never
+  /// recomputed from [item], so a later menu price change can't reprice a past order.
+  final double unitPrice;
 
   OrderLine({
     required this.item,
@@ -154,9 +157,11 @@ class OrderLine {
     this.note = '',
     this.state = LineState.queued,
     this.kotNo,
-  }) : addons = addons ?? [];
+    double? unitPrice,
+  })  : addons = addons ?? [],
+        unitPrice = unitPrice ?? _resolveUnit(item, variant, addons ?? []);
 
-  double get unit {
+  static double _resolveUnit(MenuItem item, String? variant, List<String> addons) {
     double b = item.price;
     if (variant != null) {
       for (final v in item.variants) {
@@ -171,6 +176,7 @@ class OrderLine {
     return b;
   }
 
+  double get unit => unitPrice;
   double get total => unit * qty;
   String get optText => [if (variant != null) variant!, ...addons.map((a) => '+ $a')].join(' · ');
   List<String> get mods => [if (variant != null) '> $variant', ...addons.map((a) => '+ $a')];
@@ -179,7 +185,49 @@ class OrderLine {
       o.item.id == item.id && o.variant == variant && setEquals(o.addons.toSet(), addons.toSet()) && o.note == note;
 
   OrderLine copy() => OrderLine(
-      item: item, variant: variant, addons: [...addons], qty: qty, note: note, state: state, kotNo: kotNo);
+      item: item,
+      variant: variant,
+      addons: [...addons],
+      qty: qty,
+      note: note,
+      state: state,
+      kotNo: kotNo,
+      unitPrice: unitPrice);
+
+  /// A frozen snapshot — [item] is reconstructed from stored fields, not looked up in the
+  /// live menu, so a deleted/renamed product can't break loading a historical order.
+  Map<String, dynamic> toJson() => {
+        'itemId': item.id,
+        'itemCode': item.code,
+        'itemCat': item.cat,
+        'itemName': item.name,
+        'itemVeg': item.veg,
+        'variant': variant,
+        'addons': addons,
+        'qty': qty,
+        'note': note,
+        'state': state.name,
+        'kotNo': kotNo,
+        'unitPrice': unitPrice,
+      };
+
+  factory OrderLine.fromJson(Map<String, dynamic> j) => OrderLine(
+        item: MenuItem(
+          id: j['itemId'] as String,
+          code: j['itemCode'] as String? ?? '',
+          cat: j['itemCat'] as String? ?? '',
+          name: j['itemName'] as String,
+          price: (j['unitPrice'] as num).toDouble(),
+          veg: j['itemVeg'] as bool? ?? false,
+        ),
+        variant: j['variant'] as String?,
+        addons: (j['addons'] as List? ?? []).map((e) => e as String).toList(),
+        qty: j['qty'] as int? ?? 1,
+        note: j['note'] as String? ?? '',
+        state: LineState.values.byName(j['state'] as String),
+        kotNo: j['kotNo'] as int?,
+        unitPrice: (j['unitPrice'] as num).toDouble(),
+      );
 }
 
 class Kot {
@@ -195,6 +243,16 @@ class Kot {
     if (lines.any((l) => l.state != LineState.queued)) return KotStage.preparing;
     return KotStage.fresh;
   }
+
+  Map<String, dynamic> toJson() =>
+      {'no': no, 'orderId': orderId, 'at': at.toIso8601String(), 'lines': lines.map((l) => l.toJson()).toList()};
+
+  factory Kot.fromJson(Map<String, dynamic> j) => Kot(
+        j['no'] as int,
+        j['orderId'] as int,
+        DateTime.parse(j['at'] as String),
+        (j['lines'] as List? ?? []).map((e) => OrderLine.fromJson(e as Map<String, dynamic>)).toList(),
+      );
 }
 
 class Payment {
@@ -203,6 +261,10 @@ class Payment {
   final double tendered;
   const Payment(this.method, this.amount, [this.tendered = 0]);
   double get change => method == 'Cash' && tendered > amount ? tendered - amount : 0;
+
+  Map<String, dynamic> toJson() => {'method': method, 'amount': amount, 'tendered': tendered};
+  factory Payment.fromJson(Map<String, dynamic> j) =>
+      Payment(j['method'] as String, (j['amount'] as num).toDouble(), (j['tendered'] as num?)?.toDouble() ?? 0);
 }
 
 class Order {
@@ -214,6 +276,7 @@ class Order {
   String customer, phone, address;
   final DateTime at;
   final List<OrderLine> lines = [];
+  final List<Payment> payments = [];
   int pax;
   bool billed = false;
   String? billNo;
@@ -233,7 +296,7 @@ class Order {
     this.address = '',
     DateTime? at,
     this.pax = 1,
-    this.server = 'Sarah K.',
+    this.server = '',
     this.payNote = 'Unpaid',
   }) : at = at ?? DateTime.now();
 
@@ -244,6 +307,51 @@ class Order {
   double get total => raw.roundToDouble();
   int get itemCount => lines.fold<int>(0, (a, l) => a + l.qty);
   bool get isPaid => payNote.startsWith('Paid');
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type.name,
+        'tableId': tableId,
+        'partyKey': partyKey,
+        'token': token,
+        'customer': customer,
+        'phone': phone,
+        'address': address,
+        'at': at.toIso8601String(),
+        'pax': pax,
+        'billed': billed,
+        'billNo': billNo,
+        'dispatched': dispatched,
+        'rider': rider,
+        'server': server,
+        'payNote': payNote,
+        'lines': lines.map((l) => l.toJson()).toList(),
+        'payments': payments.map((p) => p.toJson()).toList(),
+      };
+
+  factory Order.fromJson(Map<String, dynamic> j) {
+    final o = Order(
+      id: j['id'] as int,
+      type: OrderType.values.byName(j['type'] as String),
+      tableId: j['tableId'] as String?,
+      partyKey: j['partyKey'] as String?,
+      token: j['token'] as String? ?? '',
+      customer: j['customer'] as String? ?? '',
+      phone: j['phone'] as String? ?? '',
+      address: j['address'] as String? ?? '',
+      at: DateTime.parse(j['at'] as String),
+      pax: j['pax'] as int? ?? 1,
+      server: j['server'] as String? ?? '',
+      payNote: j['payNote'] as String? ?? 'Unpaid',
+    )
+      ..billed = j['billed'] as bool? ?? false
+      ..billNo = j['billNo'] as String?
+      ..dispatched = j['dispatched'] as bool? ?? false
+      ..rider = j['rider'] as String?;
+    o.lines.addAll((j['lines'] as List? ?? []).map((e) => OrderLine.fromJson(e as Map<String, dynamic>)));
+    o.payments.addAll((j['payments'] as List? ?? []).map((e) => Payment.fromJson(e as Map<String, dynamic>)));
+    return o;
+  }
 }
 
 class Party {
@@ -252,6 +360,10 @@ class Party {
   final DateTime seatedAt;
   int? orderId;
   Party(this.key, this.pax, {DateTime? seatedAt, this.orderId}) : seatedAt = seatedAt ?? DateTime.now();
+
+  Map<String, dynamic> toJson() => {'key': key, 'pax': pax, 'seatedAt': seatedAt.toIso8601String(), 'orderId': orderId};
+  factory Party.fromJson(Map<String, dynamic> j) => Party(j['key'] as String, j['pax'] as int,
+      seatedAt: DateTime.parse(j['seatedAt'] as String), orderId: j['orderId'] as int?);
 }
 
 class MenuSyncResult {
@@ -341,11 +453,32 @@ class PosPrinter {
 }
 
 class TableModel {
-  final String id, floor;
-  final int seats, w, h;
+  final String id;
+  String floor;
+  int seats, w, h;
   String? reservedFor;
   final List<Party> parties = [];
   TableModel(this.id, this.floor, this.seats, {this.w = 1, this.h = 1, this.reservedFor});
   int get used => parties.fold<int>(0, (a, p) => a + p.pax);
   int get free => seats - used;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'floor': floor,
+        'seats': seats,
+        'w': w,
+        'h': h,
+        'parties': parties.map((p) => p.toJson()).toList(),
+      };
+  factory TableModel.fromJson(Map<String, dynamic> j) {
+    final t = TableModel(
+      j['id'] as String,
+      j['floor'] as String,
+      j['seats'] as int,
+      w: j['w'] as int? ?? 1,
+      h: j['h'] as int? ?? 1,
+    );
+    t.parties.addAll((j['parties'] as List? ?? []).map((e) => Party.fromJson(e as Map<String, dynamic>)));
+    return t;
+  }
 }

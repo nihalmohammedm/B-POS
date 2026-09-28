@@ -18,6 +18,7 @@ class ReceiptData {
   final String no;
   final OrderType type;
   final String where, server, customer;
+  final String businessName, businessAddress, businessPhone;
   final int pax;
   final DateTime at;
   final List<ReceiptLine> lines;
@@ -34,6 +35,9 @@ class ReceiptData {
     required this.pax,
     required this.at,
     required this.lines,
+    this.businessName = '',
+    this.businessAddress = '',
+    this.businessPhone = '',
     this.customer = '',
     this.fee = 0,
     this.payments = const [],
@@ -46,6 +50,7 @@ class ReceiptData {
         type: o.type,
         where: s.labelOf(o),
         server: o.server,
+        businessName: s.outletName,
         pax: o.type == OrderType.dineIn ? o.pax : 0,
         at: k.at,
         customer: o.customer,
@@ -70,6 +75,9 @@ class ReceiptData {
       type: o.type,
       where: s.labelOf(o),
       server: o.server,
+      businessName: s.outletName,
+      businessAddress: s.outletAddress,
+      businessPhone: s.outletPhone,
       pax: o.type == OrderType.dineIn ? o.pax : 0,
       at: DateTime.now(),
       customer: [o.customer, o.phone].where((x) => x.isNotEmpty).join(' · '),
@@ -162,7 +170,7 @@ class ReceiptView extends StatelessWidget {
                 child: Text(_banner, style: _m(15, FontWeight.w700, Colors.white)))),
         const _Dash(),
         _kv(_d(d.at), _t(d.at)),
-        _kv('Server: ${d.server}', d.pax > 0 ? 'Pax: ${d.pax}' : ''),
+        _kv(d.server.isEmpty ? '' : 'Server: ${d.server}', d.pax > 0 ? 'Pax: ${d.pax}' : ''),
         if (d.customer.isNotEmpty && d.type != OrderType.dineIn) Text('Customer: ${d.customer}', style: _m(12)),
         if (d.reprint) _c('*** REPRINT ***', _m(12, FontWeight.w700)),
         const _Dash(),
@@ -181,8 +189,10 @@ class ReceiptView extends StatelessWidget {
           ),
         const _Dash(),
         _kv('Total items', '${d.lines.fold<int>(0, (a, l) => a + l.qty)}', w: FontWeight.w600),
-        const SizedBox(height: 12),
-        _c('— BISTRO 21 —', _m(11).copyWith(letterSpacing: 1)),
+        if (d.businessName.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _c('— ${d.businessName} —', _m(11).copyWith(letterSpacing: 1)),
+        ],
       ];
 
   List<Widget> _bill() {
@@ -192,16 +202,15 @@ class ReceiptView extends StatelessWidget {
     final tendered = cash.fold<double>(0, (a, p) => a + p.tendered), change = cash.fold<double>(0, (a, p) => a + p.change);
     final grey = _m(11, FontWeight.w400, const Color(0xFF444444));
     return [
-      _c('BISTRO 21', _m(17, FontWeight.w700)),
-      _c('MG Road, Kochi 682016', _m(12)),
-      _c('Ph: +91 484 400 2121', _m(12)),
-      _c('GSTIN: 32ABCDE1234F1Z5', _m(12)),
+      if (d.businessName.isNotEmpty) _c(d.businessName, _m(17, FontWeight.w700)),
+      if (d.businessAddress.isNotEmpty) _c(d.businessAddress, _m(12)),
+      if (d.businessPhone.isNotEmpty) _c('Ph: ${d.businessPhone}', _m(12)),
       const SizedBox(height: 8),
       _c(d.payments.isNotEmpty ? 'TAX INVOICE' : 'BILL · NOT PAID', _m(12, FontWeight.w700).copyWith(letterSpacing: 1.5)),
       const _Dash(),
       _kv('Bill No: ${d.no}', _d(d.at)),
       _kv(_typeLine, _t(d.at)),
-      _kv('Server: ${d.server}', d.pax > 0 ? 'Pax: ${d.pax}' : ''),
+      _kv(d.server.isEmpty ? '' : 'Server: ${d.server}', d.pax > 0 ? 'Pax: ${d.pax}' : ''),
       if (d.customer.isNotEmpty) Text('Customer: ${d.customer}', style: _m(12)),
       const _Dash(),
       Row(children: [
@@ -251,7 +260,7 @@ class ReceiptView extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
-        _c('Scan to pay · bistro21@okhdfc', _m(11)),
+        _c('Scan to pay', _m(11)),
       ],
       const SizedBox(height: 14),
       _c('Thank you! Visit again', _m(12, FontWeight.w600)),

@@ -19,7 +19,7 @@ class _BistroAppState extends State<BistroApp> {
   Widget build(BuildContext context) => StoreScope(
         store: store,
         child: MaterialApp(
-          title: 'Bistro 21 POS',
+          title: 'POS',
           debugShowCheckedModeBanner: false,
           theme: buildTheme(),
           home: const Launcher(),
@@ -59,7 +59,9 @@ class Launcher extends StatelessWidget {
       );
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    final s = StoreScope.of(context);
+    return Scaffold(
         body: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
@@ -75,7 +77,7 @@ class Launcher extends StatelessWidget {
                     decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 4))),
               ),
               const SizedBox(height: 14),
-              Text('Bistro 21 · Downtown', style: ts(24, w: w5)),
+              Text(s.outletName.isEmpty ? 'Loading…' : s.outletName, style: ts(24, w: w5)),
               const SizedBox(height: 4),
               Text('Choose a workspace', style: ts(15, c: C.muted)),
               const SizedBox(height: 28),
@@ -89,4 +91,5 @@ class Launcher extends StatelessWidget {
           ),
         ),
       );
+  }
 }

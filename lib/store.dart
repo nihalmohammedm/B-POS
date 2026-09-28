@@ -1,38 +1,65 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'backoffice_api.dart';
-import 'data.dart';
 import 'models.dart';
 
 class Store extends ChangeNotifier {
   Store() {
-    _seed();
     _loadPersisted();
   }
 
-  List<String> categories = ['Grill', 'Starters', 'Mains', 'Pizza', 'Burgers', 'Desserts', 'Beverages'];
-  static const floors = ['Main hall', 'Patio', 'Rooftop'];
+  List<String> categories = [];
+  List<String> get floors => {for (final t in tables) t.floor}.toList()..sort();
 
-  final List<MenuItem> menu = List.of(seedMenu);
-  final Set<String> itemOff = {'m2'};
+  final List<MenuItem> menu = [];
+  final Set<String> itemOff = {};
   final Set<String> catOff = {};
-  final Map<String, int> stock = {'g1': 11, 'g3': 4, 'd1': 6, 'v3': 24};
-  final List<TableModel> tables = seedTables();
+  final Map<String, int> stock = {};
+  final List<TableModel> tables = [];
   final List<Order> orders = [];
+  final List<Order> history = [];
   final List<Kot> kots = [];
-  final List<PosPrinter> printers = seedPrinters();
-  int _orderSeq = 1016, _kotSeq = 1016, _billSeq = 2416, _taSeq = 16, _printerSeq = 100;
+  final List<PosPrinter> printers = [];
+  List<String> quickNotes = ['No onions', 'Extra spicy', 'Less oil', 'Pack separately'];
+  int _orderSeq = 0, _kotSeq = 0, _billSeq = 0, _taSeq = 0, _printerSeq = 0;
 
   void touch() => notifyListeners();
+
+  void addQuickNote(String note) {
+    final v = note.trim();
+    if (v.isEmpty || quickNotes.contains(v)) return;
+    quickNotes.add(v);
+    notifyListeners();
+  }
+
+  void removeQuickNote(String note) {
+    quickNotes.remove(note);
+    notifyListeners();
+  }
+
+  // ---------- debounced operational save ----------
+  Timer? _saveDebounce;
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 500), _saveOperational);
+  }
 
   // ---------- local persistence ----------
   // Keeps a synced menu/printer setup across app restarts, so re-opening the APK
   // doesn't fall back to the bundled demo data and force a re-sync every time.
   static const _kMenu = 'menu', _kCategories = 'categories', _kLastSync = 'lastMenuSync';
   static const _kPrinters = 'printers';
+  static const _kTables = 'tables';
   static const _kUrl = 'backofficeUrl', _kKey = 'backofficeKey', _kOutlet = 'backofficeOutletCode';
+  static const _kOutletName = 'outletName', _kOutletAddress = 'outletAddress', _kOutletPhone = 'outletPhone';
+  static const _kOrders = 'orders', _kKots = 'kots', _kHistory = 'history';
+  static const _kItemOff = 'itemOff', _kCatOff = 'catOff', _kStock = 'stock';
+  static const _kQuickNotes = 'quickNotes', _kCounters = 'counters';
 
   Future<void> _loadPersisted() async {
     final sp = await SharedPreferences.getInstance();
@@ -40,6 +67,9 @@ class Store extends ChangeNotifier {
     backofficeUrl = sp.getString(_kUrl) ?? backofficeUrl;
     backofficeKey = sp.getString(_kKey) ?? backofficeKey;
     backofficeOutletCode = sp.getString(_kOutlet) ?? backofficeOutletCode;
+    outletName = sp.getString(_kOutletName) ?? outletName;
+    outletAddress = sp.getString(_kOutletAddress) ?? outletAddress;
+    outletPhone = sp.getString(_kOutletPhone) ?? outletPhone;
 
     final menuJson = sp.getString(_kMenu);
     final cats = sp.getStringList(_kCategories);
@@ -60,7 +90,56 @@ class Store extends ChangeNotifier {
         ..clear()
         ..addAll(saved);
     }
+
+    final tablesJson = sp.getString(_kTables);
+    if (tablesJson != null) {
+      final saved = (jsonDecode(tablesJson) as List).map((e) => TableModel.fromJson(e as Map<String, dynamic>)).toList();
+      tables
+        ..clear()
+        ..addAll(saved);
+    }
+
+    final ordersJson = sp.getString(_kOrders);
+    if (ordersJson != null) {
+      orders.addAll((jsonDecode(ordersJson) as List).map((e) => Order.fromJson(e as Map<String, dynamic>)));
+    }
+    final kotsJson = sp.getString(_kKots);
+    if (kotsJson != null) {
+      kots.addAll((jsonDecode(kotsJson) as List).map((e) => Kot.fromJson(e as Map<String, dynamic>)));
+    }
+    final historyJson = sp.getString(_kHistory);
+    if (historyJson != null) {
+      history.addAll((jsonDecode(historyJson) as List).map((e) => Order.fromJson(e as Map<String, dynamic>)));
+    }
+    final itemOffList = sp.getStringList(_kItemOff);
+    if (itemOffList != null) itemOff.addAll(itemOffList);
+    final catOffList = sp.getStringList(_kCatOff);
+    if (catOffList != null) catOff.addAll(catOffList);
+    final stockJson = sp.getString(_kStock);
+    if (stockJson != null) {
+      (jsonDecode(stockJson) as Map<String, dynamic>).forEach((k, v) => stock[k] = v as int);
+    }
+    final savedNotes = sp.getStringList(_kQuickNotes);
+    if (savedNotes != null) quickNotes = savedNotes;
+    final countersJson = sp.getString(_kCounters);
+    if (countersJson != null) {
+      final c = jsonDecode(countersJson) as Map<String, dynamic>;
+      _orderSeq = c['orderSeq'] as int? ?? _orderSeq;
+      _kotSeq = c['kotSeq'] as int? ?? _kotSeq;
+      _billSeq = c['billSeq'] as int? ?? _billSeq;
+      _taSeq = c['taSeq'] as int? ?? _taSeq;
+    }
     notifyListeners();
+
+    // First-ever launch (nothing cached yet): pull the real menu straight away instead
+    // of sitting empty until someone finds Settings.
+    if (menuJson == null) {
+      try {
+        await syncMenu();
+      } catch (_) {
+        // Stays empty with lastSyncError set; Settings surfaces it for a manual retry.
+      }
+    }
   }
 
   Future<void> _saveMenu() async {
@@ -68,11 +147,37 @@ class Store extends ChangeNotifier {
     await sp.setString(_kMenu, jsonEncode(menu.map((m) => m.toJson()).toList()));
     await sp.setStringList(_kCategories, categories);
     if (lastMenuSync != null) await sp.setString(_kLastSync, lastMenuSync!.toIso8601String());
+    await sp.setString(_kOutletName, outletName);
+    await sp.setString(_kOutletAddress, outletAddress);
+    await sp.setString(_kOutletPhone, outletPhone);
   }
 
   Future<void> _savePrinters() async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kPrinters, jsonEncode(printers.map((p) => p.toJson()).toList()));
+  }
+
+  Future<void> _saveTables() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kTables, jsonEncode(tables.map((t) => t.toJson()).toList()));
+  }
+
+  /// Everything that changes during a shift — active/settled orders, KOTs, seated
+  /// parties, availability toggles, stock, quick notes, sequence counters — saved as
+  /// one debounced bundle (see the `notifyListeners` override) so nothing needs its
+  /// own explicit save call at every call site.
+  Future<void> _saveOperational() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kOrders, jsonEncode(orders.map((o) => o.toJson()).toList()));
+    await sp.setString(_kKots, jsonEncode(kots.map((k) => k.toJson()).toList()));
+    await sp.setString(_kHistory, jsonEncode(history.map((o) => o.toJson()).toList()));
+    await sp.setString(_kTables, jsonEncode(tables.map((t) => t.toJson()).toList()));
+    await sp.setStringList(_kItemOff, itemOff.toList());
+    await sp.setStringList(_kCatOff, catOff.toList());
+    await sp.setString(_kStock, jsonEncode(stock));
+    await sp.setStringList(_kQuickNotes, quickNotes);
+    await sp.setString(_kCounters,
+        jsonEncode({'orderSeq': _orderSeq, 'kotSeq': _kotSeq, 'billSeq': _billSeq, 'taSeq': _taSeq}));
   }
 
   Future<void> _saveBackofficeConfig() async {
@@ -91,17 +196,20 @@ class Store extends ChangeNotifier {
   void addPrinter(PosPrinter p) {
     printers.add(p);
     notifyListeners();
+    _savePrinters();
   }
 
   void updatePrinter(PosPrinter p) {
     final i = printers.indexWhere((x) => x.id == p.id);
     if (i != -1) printers[i] = p;
     notifyListeners();
+    _savePrinters();
   }
 
   void removePrinter(String id) {
     printers.removeWhere((p) => p.id == id);
     notifyListeners();
+    _savePrinters();
   }
 
   /// Sends a short test ticket to [p]. Stands in for real ESC/POS I/O over
@@ -111,6 +219,7 @@ class Store extends ChangeNotifier {
     p.lastTestAt = DateTime.now();
     p.lastTestOk = true;
     notifyListeners();
+    _savePrinters();
     return true;
   }
 
@@ -119,6 +228,7 @@ class Store extends ChangeNotifier {
   String backofficeKey =
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3ODQ0NTc0ODQsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.WXyhtM_v3dP2_P1BwNmVdEXHwhfQ2fHanofZ3Prn_BQ';
   String backofficeOutletCode = 'BOLGATTY';
+  String outletName = '', outletAddress = '', outletPhone = '';
   DateTime? lastMenuSync;
   bool syncingMenu = false;
   MenuSyncResult? lastSyncResult;
@@ -129,6 +239,7 @@ class Store extends ChangeNotifier {
     if (key != null) backofficeKey = key;
     if (outletCode != null) backofficeOutletCode = outletCode;
     notifyListeners();
+    _saveBackofficeConfig();
   }
 
   /// Pulls the active menu for [backofficeOutletCode] from the backoffice (a self-hosted
@@ -156,9 +267,32 @@ class Store extends ChangeNotifier {
       final removed = menu.where((m) => !seenIds.contains(m.id)).length;
       menu.removeWhere((m) => !seenIds.contains(m.id));
       if (result.categories.isNotEmpty) categories = result.categories;
+      if (result.outlet.name.isNotEmpty) outletName = result.outlet.name;
+      outletAddress = result.outlet.address;
+      outletPhone = result.outlet.phone;
+
+      // Merge tables in place so a table with a live party mid-sync keeps its seated guests.
+      final seenTableIds = <String>{};
+      for (final t in result.tables) {
+        seenTableIds.add(t.id);
+        final i = tables.indexWhere((x) => x.id == t.id);
+        if (i == -1) {
+          tables.add(t);
+        } else {
+          tables[i]
+            ..floor = t.floor
+            ..seats = t.seats
+            ..w = t.w
+            ..h = t.h;
+        }
+      }
+      tables.removeWhere((t) => !seenTableIds.contains(t.id) && t.parties.isEmpty);
+
       final r = MenuSyncResult(added: added, updated: updated, removed: removed, at: DateTime.now());
       lastMenuSync = r.at;
       lastSyncResult = r;
+      await _saveMenu();
+      await _saveTables();
       return r;
     } catch (e) {
       lastSyncError = e is BackofficeException ? e.message : e.toString();
@@ -255,7 +389,7 @@ class Store extends ChangeNotifier {
     return true;
   }
 
-  Order ensurePartyOrder(TableModel t, Party p, {String server = 'Sarah K.'}) {
+  Order ensurePartyOrder(TableModel t, Party p, {String server = ''}) {
     final ex = orderOfParty(t, p);
     if (ex != null) return ex;
     final o = Order(
@@ -267,7 +401,7 @@ class Store extends ChangeNotifier {
   }
 
   // ---------- orders ----------
-  Order draft(OrderType type, {String server = 'Sarah K.'}) => Order(id: 0, type: type, server: server);
+  Order draft(OrderType type, {String server = ''}) => Order(id: 0, type: type, server: server);
   String get nextTaToken => 'TA-${_taSeq + 1}';
   int get nextKotNo => _kotSeq + 1;
   String previewBillNo(Order o) => o.billNo ?? 'B${_billSeq + 1}';
@@ -359,18 +493,19 @@ class Store extends ChangeNotifier {
 
   void dispatch(Order o) {
     o.dispatched = true;
-    o.rider ??= 'Vishnu · KL07 CK 4410';
     for (final l in o.lines) {
       l.state = LineState.served;
     }
     notifyListeners();
   }
 
-  void settle(Order o) {
+  void settle(Order o, {List<Payment> payments = const []}) {
     assignBillNo(o);
+    o.payments.addAll(payments);
     orders.remove(o);
     kots.removeWhere((k) => k.orderId == o.id);
     if (o.type == OrderType.dineIn) table(o.tableId!).parties.removeWhere((p) => p.orderId == o.id);
+    history.add(o);
     notifyListeners();
   }
 
@@ -420,67 +555,5 @@ class Store extends ChangeNotifier {
       l.state = LineState.preparing;
     }
     notifyListeners();
-  }
-
-  // ---------- seed ----------
-  void _seed() {
-    final now = DateTime.now();
-    OrderLine ln(String id, int q, LineState s, {String? v, List<String> a = const [], String n = ''}) =>
-        OrderLine(item: item(id), qty: q, variant: v, addons: [...a], state: s, note: n);
-
-    Order add(Order o, int mins, List<OrderLine> ls) {
-      final k = Kot(++_kotSeq, o.id, now.subtract(Duration(minutes: mins)), []);
-      for (final l in ls) {
-        l.kotNo = k.no;
-        k.lines.add(l);
-        o.lines.add(l);
-      }
-      kots.add(k);
-      if (!orders.contains(o)) orders.add(o);
-      return o;
-    }
-
-    Order dine(String tid, String key, int pax, int mins, List<OrderLine> ls) {
-      final t = table(tid);
-      final p = Party(key, pax, seatedAt: now.subtract(Duration(minutes: mins)));
-      t.parties.add(p);
-      final o = Order(id: ++_orderSeq, type: OrderType.dineIn, tableId: tid, partyKey: key, pax: pax, at: p.seatedAt);
-      p.orderId = o.id;
-      return add(o, mins, ls);
-    }
-
-    const sv = LineState.served, pr = LineState.preparing, q = LineState.queued, rd = LineState.ready;
-    dine('T2', 'A', 4, 22, [ln('p1', 2, sv, v: 'Regular 8"'), ln('v4', 4, sv)]);
-    final t3 = dine('T3', 'A', 4, 71, [ln('m2', 1, sv), ln('g1', 2, sv, v: 'Half'), ln('v4', 4, sv), ln('d2', 2, sv)]);
-    t3
-      ..billed = true
-      ..billNo = 'B${++_billSeq}';
-    dine('T4', 'A', 2, 34, [ln('m1', 2, sv), ln('s2', 1, pr), ln('b1', 2, pr), ln('d1', 1, q, n: 'Serve after mains')]);
-    dine('T5', 'A', 1, 14, [ln('v3', 1, sv, v: 'Regular'), ln('b1', 1, pr)]);
-    dine('T5', 'B', 2, 6, [ln('s4', 1, sv), ln('m1', 1, q, n: 'Medium spicy')]);
-    dine('T8', 'A', 12, 35, [ln('p2', 4, sv, v: 'Large 12"'), ln('s3', 3, pr), ln('v3', 6, q, v: 'Regular')]);
-    dine('P1', 'A', 1, 12, [ln('b1', 1, pr, a: ['Cheese Slice'])]);
-
-    add(
-        Order(id: ++_orderSeq, type: OrderType.takeaway, token: 'TA-${++_taSeq}', customer: 'Priya', phone: '90480 55210',
-            at: now.subtract(const Duration(minutes: 8))),
-        8,
-        [ln('m3', 1, pr, n: 'Less oil'), ln('v2', 2, rd)]);
-    add(
-        Order(id: ++_orderSeq, type: OrderType.takeaway, token: 'TA-${++_taSeq}', customer: 'Tom', phone: '81290 44120',
-            at: now.subtract(const Duration(minutes: 19)), payNote: 'Paid · Cash'),
-        19,
-        [ln('b1', 1, rd, a: ['Cheese Slice']), ln('v3', 1, rd, v: 'Regular')]);
-    final d1 = Order(id: ++_orderSeq, type: OrderType.delivery, customer: 'Rahul Menon', phone: '98470 11223',
-        address: 'Flat 4B, Palm Grove, Kakkanad', at: now.subtract(const Duration(minutes: 26)), payNote: 'Paid · UPI');
-    d1.token = '#${d1.id}';
-    add(d1, 26, [ln('g1', 1, sv, v: 'Full', a: ['Mayonnaise']), ln('v4', 2, sv)]);
-    d1
-      ..dispatched = true
-      ..rider = 'Anil · KL07 BX 2231';
-    final d2 = Order(id: ++_orderSeq, type: OrderType.delivery, customer: 'Sneha K.', phone: '99610 33498',
-        address: '12, Rose Villa, Edappally', at: now.subtract(const Duration(minutes: 5)), payNote: 'Cash on delivery');
-    d2.token = '#${d2.id}';
-    add(d2, 5, [ln('p1', 2, q, v: 'Medium 10"', a: ['Cheese Burst'])]);
   }
 }

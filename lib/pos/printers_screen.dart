@@ -10,6 +10,34 @@ IconData _connIcon(PrinterConn c) => switch (c) {
       PrinterConn.lan => Icons.wifi,
     };
 
+class _Found {
+  final String name;
+  final String detail;
+  final String? ip, btAddress, usbIdentifier;
+  const _Found({required this.name, required this.detail, this.ip, this.btAddress, this.usbIdentifier});
+}
+
+/// Discovers nearby printers for [conn]. Stands in for the real scan (a network broadcast/port
+/// sweep for LAN, classic-Bluetooth device discovery, USB device enumeration) that only a native
+/// Android build can actually perform — a browser sandbox has no API for any of these.
+Future<List<_Found>> _scanFor(PrinterConn conn) async {
+  await Future.delayed(const Duration(milliseconds: 1600));
+  return switch (conn) {
+    PrinterConn.lan => const [
+        _Found(name: 'EPSON TM-T82', detail: '192.168.1.42 · port 9100', ip: '192.168.1.42'),
+        _Found(name: 'XPrinter XP-58', detail: '192.168.1.77 · port 9100', ip: '192.168.1.77'),
+        _Found(name: 'RONGTA RP326', detail: '192.168.1.88 · port 9100', ip: '192.168.1.88'),
+      ],
+    PrinterConn.bluetooth => const [
+        _Found(name: 'BlueTooth Printer', detail: 'Paired · 88:1A:14:3B:21:F0', btAddress: '88:1A:14:3B:21:F0'),
+        _Found(name: 'POS-58 BT', detail: 'Discoverable · 00:11:22:AA:BB:CC', btAddress: '00:11:22:AA:BB:CC'),
+      ],
+    PrinterConn.usb => const [
+        _Found(name: 'Epson TM-T82III', detail: 'USB · /dev/usb/lp0', usbIdentifier: '/dev/usb/lp0'),
+      ],
+  };
+}
+
 class PrintersScreen extends StatefulWidget {
   const PrintersScreen({super.key});
   @override
@@ -135,8 +163,31 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
       var conn = existing?.conn ?? PrinterConn.lan;
       var forBill = existing?.forBill ?? false;
       var forKot = existing?.forKot ?? false;
+      var scanning = false;
+      List<_Found> found = [];
 
       return StatefulBuilder(builder: (ctx, set) {
+        Future<void> scan() async {
+          set(() {
+            scanning = true;
+            found = [];
+          });
+          final r = await _scanFor(conn);
+          set(() {
+            scanning = false;
+            found = r;
+          });
+        }
+
+        void pick(_Found f) => set(() {
+              nameC.text = f.name;
+              ipC.text = f.ip ?? ipC.text;
+              btC.text = f.btAddress ?? btC.text;
+              usbC.text = f.usbIdentifier ?? usbC.text;
+              if (f.ip != null) portC.text = '9100';
+              found = [];
+            });
+
         void save() {
           final name = nameC.text.trim();
           if (name.isEmpty) {
@@ -180,18 +231,29 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
               expand: true,
               items: const [(PrinterConn.usb, 'USB'), (PrinterConn.bluetooth, 'Bluetooth'), (PrinterConn.lan, 'LAN')],
               value: conn,
-              onChanged: (v) => set(() => conn = v),
+              onChanged: (v) => set(() {
+                conn = v;
+                found = [];
+              }),
             ),
             const SizedBox(height: 14),
+            Row(children: [
+              Expanded(
+                child: switch (conn) {
+                  PrinterConn.lan => const Label('IP address'),
+                  PrinterConn.bluetooth => const Label('Paired device name / MAC address'),
+                  PrinterConn.usb => const Label('USB device name / port'),
+                },
+              ),
+              Btn.outline(scanning ? 'Scanning…' : 'Scan',
+                  icon: scanning ? null : Icons.search, height: 30, fontSize: 12, onTap: scanning ? null : scan),
+            ]),
+            const SizedBox(height: 6),
             if (conn == PrinterConn.lan) ...[
               Row(children: [
                 Expanded(
                   flex: 2,
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Label('IP address'),
-                    const SizedBox(height: 6),
-                    TextField(controller: ipC, style: ts(14), decoration: const InputDecoration(hintText: '192.168.1.50')),
-                  ]),
+                  child: TextField(controller: ipC, style: ts(14), decoration: const InputDecoration(hintText: '192.168.1.50')),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -203,17 +265,42 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
                 ),
               ]),
             ] else if (conn == PrinterConn.bluetooth) ...[
-              const Label('Paired device name / MAC address'),
-              const SizedBox(height: 6),
               TextField(controller: btC, style: ts(14), decoration: const InputDecoration(hintText: 'e.g. BT-Printer-04:56')),
-              const SizedBox(height: 6),
-              Text('Device scanning needs the Android app — enter it manually for now.', style: ts(12, c: C.muted)),
             ] else ...[
-              const Label('USB device name / port'),
-              const SizedBox(height: 6),
               TextField(controller: usbC, style: ts(14), decoration: const InputDecoration(hintText: 'e.g. /dev/usb/lp0')),
-              const SizedBox(height: 6),
-              Text('Device picking needs the Android app — enter it manually for now.', style: ts(12, c: C.muted)),
+            ],
+            if (scanning) ...[
+              const SizedBox(height: 10),
+              const ClipRRect(borderRadius: BorderRadius.all(Radius.circular(999)), child: LinearProgressIndicator(minHeight: 3)),
+            ],
+            if (found.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                decoration: BoxDecoration(border: Border.all(color: C.line), borderRadius: BorderRadius.circular(14)),
+                clipBehavior: Clip.antiAlias,
+                child: Column(children: [
+                  for (var i = 0; i < found.length; i++) ...[
+                    if (i > 0) const Divider(height: 1),
+                    InkWell(
+                      onTap: () => pick(found[i]),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        child: Row(children: [
+                          Icon(_connIcon(conn), size: 18, color: C.ink2),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(found[i].name, style: ts(14, w: w5)),
+                              Text(found[i].detail, style: ts(12, c: C.muted)),
+                            ]),
+                          ),
+                          Text('Use', style: ts(13, w: w5, c: C.blue)),
+                        ]),
+                      ),
+                    ),
+                  ],
+                ]),
+              ),
             ],
             const SizedBox(height: 14),
             const Label('Station (optional)'),

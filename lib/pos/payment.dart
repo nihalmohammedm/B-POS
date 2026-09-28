@@ -251,11 +251,7 @@ class _PayDialogState extends State<_PayDialog> {
       return Padding(
         padding: const EdgeInsets.all(20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Text('UPI · Payment ${idx + 1}', style: ts(15, w: w5)),
-            const Spacer(),
-            Text('bistro21@okhdfc', style: ts(13, c: C.muted)),
-          ]),
+          Text('UPI · Payment ${idx + 1}', style: ts(15, w: w5)),
           const SizedBox(height: 16),
           Center(
             child: Container(
@@ -367,7 +363,7 @@ Future<void> settleFlow(BuildContext context, Order o) async {
   s.assignBillNo(o);
   final data = ReceiptData.bill(s, o, payments: pays, no: o.billNo);
   final total = o.total;
-  s.settle(o);
+  s.settle(o, payments: pays);
   final change = pays.fold<double>(0, (a, p) => a + p.change);
   toast(context, '$label settled · ${inr(total)}${change > 0 ? ' · Return ${inr(change, decimals: true)}' : ''}');
   await showPrintPreview(context, bill: data, subtitle: pays.map((p) => '${p.method} ${inr(p.amount)}').join(' + '));

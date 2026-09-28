@@ -27,6 +27,7 @@ class _PosShellState extends State<PosShell> {
 
   @override
   Widget build(BuildContext context) {
+    final s = StoreScope.of(context);
     final body = switch (tab) {
       0 => OrderTakingScreen(key: ValueKey('ot$_gen'), target: target, onDone: () => target = null),
       1 => TablesScreen(onAddItems: openOrderTaking),
@@ -63,12 +64,13 @@ class _PosShellState extends State<PosShell> {
                       decoration: BoxDecoration(
                           color: Colors.white, borderRadius: BorderRadius.circular(999), border: Border.all(color: C.line)),
                       child: Row(children: [
-                        const CircleAvatar(
+                        CircleAvatar(
                             radius: 19,
                             backgroundColor: C.sky,
-                            child: Text('B', style: TextStyle(color: Colors.white, fontWeight: w5))),
+                            child: Text(s.outletName.isEmpty ? '·' : s.outletName[0].toUpperCase(),
+                                style: const TextStyle(color: Colors.white, fontWeight: w5))),
                         const SizedBox(width: 10),
-                        Text('Bistro 21 · Downtown', style: ts(16, w: w5)),
+                        Text(s.outletName.isEmpty ? 'Loading…' : s.outletName, style: ts(16, w: w5)),
                         const SizedBox(width: 10),
                         const Pill('OPEN', fg: C.greenInk, leading: Dot(color: Color(0xFF34A853), size: 6)),
                       ]),
@@ -96,7 +98,7 @@ class _PosShellState extends State<PosShell> {
               const CircleAvatar(
                   radius: 25,
                   backgroundColor: Color(0xFFFFD9A8),
-                  child: Text('SK', style: TextStyle(color: Color(0xFF7A4A0C), fontWeight: w5))),
+                  child: Icon(Icons.person_outline, color: Color(0xFF7A4A0C))),
             ]),
             const SizedBox(height: 18),
             Expanded(child: body),

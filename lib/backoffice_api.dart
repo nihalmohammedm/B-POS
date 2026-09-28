@@ -9,10 +9,17 @@ class BackofficeException implements Exception {
   String toString() => message;
 }
 
+class OutletInfo {
+  final String name, address, phone;
+  const OutletInfo({this.name = '', this.address = '', this.phone = ''});
+}
+
 class BackofficeMenu {
   final List<String> categories;
   final List<MenuItem> items;
-  BackofficeMenu(this.categories, this.items);
+  final OutletInfo outlet;
+  final List<TableModel> tables;
+  BackofficeMenu(this.categories, this.items, this.outlet, this.tables);
 }
 
 /// Talks to the `bpos` schema of a self-hosted Supabase/PostgREST backend.
@@ -39,9 +46,15 @@ class BackofficeApi {
   /// Pulls the active menu for one outlet: categories, products, their variants and modifiers
   /// (product- and variant-level modifier groups are flattened into a single add-on list per item).
   Future<BackofficeMenu> fetchMenu({required String outletCode}) async {
-    final outlets = await _get('outlets', {'select': 'id', 'code': 'eq.$outletCode', 'limit': '1'});
+    final outlets = await _get('outlets', {'select': 'id,name,address,phone', 'code': 'eq.$outletCode', 'limit': '1'});
     if (outlets.isEmpty) throw BackofficeException('No outlet found with code "$outletCode"');
-    final outletId = outlets.first['id'] as String;
+    final outletRow = outlets.first as Map<String, dynamic>;
+    final outletId = outletRow['id'] as String;
+    final outlet = OutletInfo(
+      name: outletRow['name'] as String? ?? '',
+      address: outletRow['address'] as String? ?? '',
+      phone: outletRow['phone'] as String? ?? '',
+    );
 
     final cats = await _get('categories', {
       'select': 'id,name,display_order',
@@ -52,13 +65,31 @@ class BackofficeApi {
     final catNameById = {for (final c in cats) c['id'] as String: c['name'] as String};
     final categoryNames = [for (final c in cats) c['name'] as String];
 
+    // No floor/section or shape column exists yet, so every synced table lands in one flat
+    // group and its tile shape is inferred from seat count: small tables render as a square,
+    // bigger ones as a wider rectangle.
+    final tableRows = await _get('tables', {
+      'select': 'table_number,maximum_occupancy,display_order',
+      'outlet_id': 'eq.$outletId',
+      'is_active': 'eq.true',
+      'order': 'display_order.asc',
+    });
+    final tables = [
+      for (final t in tableRows)
+        () {
+          final seats = t['maximum_occupancy'] as int;
+          final (w, h) = switch (seats) { <= 4 => (1, 1), <= 8 => (2, 1), _ => (2, 2) };
+          return TableModel(t['table_number'] as String, 'Tables', seats, w: w, h: h);
+        }()
+    ];
+
     final products = await _get('products', {
       'select': '*',
       'outlet_id': 'eq.$outletId',
       'is_active': 'eq.true',
       'order': 'display_order.asc',
     });
-    if (products.isEmpty) return BackofficeMenu(categoryNames, []);
+    if (products.isEmpty) return BackofficeMenu(categoryNames, [], outlet, tables);
     final productIds = [for (final p in products) p['id'] as String];
     final idsIn = 'in.(${productIds.join(',')})';
 
@@ -131,6 +162,6 @@ class BackofficeApi {
       ));
     }
 
-    return BackofficeMenu(categoryNames, items);
+    return BackofficeMenu(categoryNames, items, outlet, tables);
   }
 }

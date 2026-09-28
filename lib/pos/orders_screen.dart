@@ -173,7 +173,7 @@ class OrderDetail extends StatelessWidget {
     final flow = flows[o.type]!;
     final idx = flow.indexOf(st) < 0 ? 0 : flow.indexOf(st);
     final sub = o.type == OrderType.dineIn
-        ? '${o.pax} guests · ${o.server}'
+        ? '${o.pax} guests${o.server.isEmpty ? '' : ' · ${o.server}'}'
         : o.type == OrderType.delivery
             ? '${o.address}${o.rider != null ? ' · Rider ${o.rider}' : ''}'
             : o.phone;

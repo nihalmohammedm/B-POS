@@ -29,22 +29,10 @@ class C {
   static const purpleInk = Color(0xFF6A45A8);
 }
 
-/// category -> (strong, tint)
-const catColors = <String, (Color, Color)>{
-  'Grill': (Color(0xFFC2562B), Color(0xFFFBECE5)),
-  'Starters': (Color(0xFF6B6461), Color(0xFFF1EFEE)),
-  'Mains': (Color(0xFF3D9148), Color(0xFFE8F4EA)),
-  'Pizza': (Color(0xFFE0A53A), Color(0xFFFCF3E2)),
-  'Burgers': (Color(0xFF3F8FD6), Color(0xFFE6F1FB)),
-  'Desserts': (Color(0xFFD0484E), Color(0xFFFBE9EA)),
-  'Beverages': (Color(0xFF8A63C9), Color(0xFFF1ECF9)),
-};
-
 const partyColors = [C.sky, C.purple, Color(0xFF2FA39A), C.green, C.red, Color(0xFF6B6461)];
 
-/// (strong, tint) pairs for categories outside the curated `catColors` map above —
-/// picked deterministically so a category synced from the backoffice always gets
-/// the same color, without needing a palette entry hand-written for it.
+/// (strong, tint) pairs, picked deterministically per category name so a category
+/// synced from the backoffice always gets the same color without a hand-written map.
 const _catPalette = <(Color, Color)>[
   (Color(0xFFC2562B), Color(0xFFFBECE5)),
   (Color(0xFF6B6461), Color(0xFFF1EFEE)),
@@ -56,7 +44,7 @@ const _catPalette = <(Color, Color)>[
   (Color(0xFF2FA39A), Color(0xFFE3F4F3)),
 ];
 
-(Color, Color) colorForCategory(String cat) => catColors[cat] ?? _catPalette[cat.hashCode.abs() % _catPalette.length];
+(Color, Color) colorForCategory(String cat) => _catPalette[cat.hashCode.abs() % _catPalette.length];
 
 ThemeData buildTheme() {
   final base = ThemeData(

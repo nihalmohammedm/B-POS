@@ -5,10 +5,9 @@ import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
-const quickNotes = ['No onions', 'Extra spicy', 'Less oil', 'Pack separately'];
-
 // ---------------- Customise (variants / add-ons) ----------------
 Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderLine? initial}) {
+  final quickNotes = StoreScope.read(context).quickNotes;
   String? variant = initial?.variant ?? (m.variants.isNotEmpty ? m.variants.first.name : null);
   final addons = <String>{...?initial?.addons};
   int qty = initial?.qty ?? 1;
@@ -140,6 +139,7 @@ Widget _addonTile(Addon a, bool on, VoidCallback onTap) => Material(
 
 // ---------------- Edit qty / note for simple items ----------------
 Future<OrderLine?> showNoteDialog(BuildContext context, OrderLine l) {
+  final quickNotes = StoreScope.read(context).quickNotes;
   int qty = l.qty;
   final c = TextEditingController(text: l.note);
   return showPanelDialog<OrderLine>(context,
@@ -496,7 +496,7 @@ Future<(String, String)?> showTablePicker(BuildContext context) {
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    for (final f in Store.floors) ...[
+                    for (final f in s.floors) ...[
                       Label(f),
                       const SizedBox(height: 8),
                       Wrap(spacing: 8, runSpacing: 8, children: [

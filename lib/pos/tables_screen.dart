@@ -14,18 +14,24 @@ class TablesScreen extends StatefulWidget {
 }
 
 class _TablesScreenState extends State<TablesScreen> {
-  String floor = 'Main hall';
-  String? sel = 'T4';
+  String? floor;
+  String? sel;
 
   @override
   Widget build(BuildContext context) {
     final s = StoreScope.of(context);
+    final floors = s.floors;
+    if (floor == null || !floors.contains(floor)) floor = floors.isEmpty ? null : floors.first;
+    if (sel == null && s.tables.isNotEmpty) sel = s.tables.first.id;
     return LayoutBuilder(builder: (c, cons) {
       final wide = cons.maxWidth >= 1000;
       final area = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Wrap(spacing: 14, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('Floor', style: ts(22, w: w5)),
-          Seg<String>(items: [for (final f in Store.floors) (f, f)], value: floor, onChanged: (v) => setState(() => floor = v)),
+          if (floors.isEmpty)
+            Text('No tables set up yet', style: ts(14, c: C.muted))
+          else
+            Seg<String>(items: [for (final f in floors) (f, f)], value: floor!, onChanged: (v) => setState(() => floor = v)),
           Container(
             height: 44,
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -55,7 +61,7 @@ class _TablesScreenState extends State<TablesScreen> {
                 color: const Color(0xFFF6F6F6), borderRadius: BorderRadius.circular(24), border: Border.all(color: C.line)),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: Wrap(spacing: 24, runSpacing: 24, children: [for (final t in s.tablesOn(floor)) _tile(s, t, wide)]),
+              child: Wrap(spacing: 24, runSpacing: 24, children: [if (floor != null) for (final t in s.tablesOn(floor!)) _tile(s, t, wide)]),
             ),
           ),
         ),
@@ -103,14 +109,18 @@ class _TablesScreenState extends State<TablesScreen> {
     }
     final chairs = math.min(t.seats, 12);
     final top = (chairs / 2).ceil();
-    Widget chairRow(List<Color> cs) => SizedBox(
-          height: 10,
-          child: Row(children: [
+    Widget chairRow(List<Color> cs) => Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
             for (var i = 0; i < cs.length; i++) ...[
-              if (i > 0) const SizedBox(width: 8),
-              Expanded(child: Container(decoration: BoxDecoration(color: cs[i], borderRadius: BorderRadius.circular(5)))),
+              if (i > 0) const SizedBox(width: 7),
+              Container(
+                width: 11,
+                height: 11,
+                decoration: BoxDecoration(
+                    color: cs[i], shape: BoxShape.circle, border: Border.all(color: const Color(0x14000000)))),
             ],
-          ]),
+          ],
         );
     final shared = t.parties.length > 1 || (t.parties.isNotEmpty && t.free > 0);
     return GestureDetector(
@@ -121,7 +131,7 @@ class _TablesScreenState extends State<TablesScreen> {
       child: SizedBox(
         width: w,
         height: h,
-        child: Column(children: [
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Padding(padding: EdgeInsets.symmetric(horizontal: w * .14), child: chairRow(seatColors.take(top).toList())),
           const SizedBox(height: 6),
           Expanded(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:unified_esc_pos_printer/unified_esc_pos_printer.dart' as esc;
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
@@ -17,25 +18,39 @@ class _Found {
   const _Found({required this.name, required this.detail, this.ip, this.btAddress, this.usbIdentifier});
 }
 
-/// Discovers nearby printers for [conn]. Stands in for the real scan (a network broadcast/port
-/// sweep for LAN, classic-Bluetooth device discovery, USB device enumeration) that only a native
-/// Android build can actually perform — a browser sandbox has no API for any of these.
+/// Real device discovery via `unified_esc_pos_printer`'s [esc.PrinterManager]:
+/// a genuine TCP port-9100 subnet sweep for LAN, classic-Bluetooth + BLE device
+/// discovery for Bluetooth, and OS-level USB/serial enumeration for USB. No
+/// canned results — an empty list means nothing was actually found.
+///
+/// Bluetooth (classic SPP) only works at runtime on Android; USB works on
+/// Android (OTG) and desktop. On unsupported platforms the underlying
+/// connector just yields no devices rather than throwing.
+final _printerManager = esc.PrinterManager();
+
 Future<List<_Found>> _scanFor(PrinterConn conn) async {
-  await Future.delayed(const Duration(milliseconds: 1600));
-  return switch (conn) {
-    PrinterConn.lan => const [
-        _Found(name: 'EPSON TM-T82', detail: '192.168.1.42 · port 9100', ip: '192.168.1.42'),
-        _Found(name: 'XPrinter XP-58', detail: '192.168.1.77 · port 9100', ip: '192.168.1.77'),
-        _Found(name: 'RONGTA RP326', detail: '192.168.1.88 · port 9100', ip: '192.168.1.88'),
-      ],
-    PrinterConn.bluetooth => const [
-        _Found(name: 'BlueTooth Printer', detail: 'Paired · 88:1A:14:3B:21:F0', btAddress: '88:1A:14:3B:21:F0'),
-        _Found(name: 'POS-58 BT', detail: 'Discoverable · 00:11:22:AA:BB:CC', btAddress: '00:11:22:AA:BB:CC'),
-      ],
-    PrinterConn.usb => const [
-        _Found(name: 'Epson TM-T82III', detail: 'USB · /dev/usb/lp0', usbIdentifier: '/dev/usb/lp0'),
-      ],
+  final types = switch (conn) {
+    PrinterConn.lan => const {esc.PrinterConnectionType.network},
+    PrinterConn.bluetooth => const {esc.PrinterConnectionType.bluetooth, esc.PrinterConnectionType.ble},
+    PrinterConn.usb => const {esc.PrinterConnectionType.usb},
   };
+  List<esc.PrinterDevice> devices;
+  try {
+    devices = await _printerManager.scanPrinters(timeout: const Duration(seconds: 5), types: types);
+  } catch (_) {
+    devices = const [];
+  }
+  return [
+    for (final d in devices)
+      if (d is esc.NetworkPrinterDevice)
+        _Found(name: d.name, detail: '${d.host} · port ${d.port}', ip: d.host)
+      else if (d is esc.BluetoothPrinterDevice)
+        _Found(name: d.name, detail: 'Bluetooth · ${d.address}', btAddress: d.address)
+      else if (d is esc.BlePrinterDevice)
+        _Found(name: d.name, detail: 'BLE · ${d.deviceId}', btAddress: d.deviceId)
+      else if (d is esc.UsbPrinterDevice)
+        _Found(name: d.name, detail: 'USB · ${d.identifier}', usbIdentifier: d.identifier),
+  ];
 }
 
 class PrintersScreen extends StatefulWidget {
@@ -164,17 +179,20 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
       var forBill = existing?.forBill ?? false;
       var forKot = existing?.forKot ?? false;
       var scanning = false;
+      var hasScanned = false;
       List<_Found> found = [];
 
       return StatefulBuilder(builder: (ctx, set) {
         Future<void> scan() async {
           set(() {
             scanning = true;
+            hasScanned = false;
             found = [];
           });
           final r = await _scanFor(conn);
           set(() {
             scanning = false;
+            hasScanned = true;
             found = r;
           });
         }
@@ -234,6 +252,7 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
               onChanged: (v) => set(() {
                 conn = v;
                 found = [];
+                hasScanned = false;
               }),
             ),
             const SizedBox(height: 14),
@@ -272,6 +291,15 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
             if (scanning) ...[
               const SizedBox(height: 10),
               const ClipRRect(borderRadius: BorderRadius.all(Radius.circular(999)), child: LinearProgressIndicator(minHeight: 3)),
+            ],
+            if (hasScanned && found.isEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                conn == PrinterConn.bluetooth
+                    ? 'No Bluetooth printers found · classic Bluetooth scanning only works on Android'
+                    : 'No printers found on this connection',
+                style: ts(12, c: C.muted),
+              ),
             ],
             if (found.isNotEmpty) ...[
               const SizedBox(height: 10),

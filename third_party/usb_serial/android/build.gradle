@@ -1,0 +1,53 @@
+// Vendored + patched copy of usb_serial 0.5.2 (see ../../../README.md in this
+// third_party folder for why). The upstream android/build.gradle uses the old
+// per-module `buildscript { classpath 'com.android.tools.build:gradle:...' }`
+// + `jcenter()` pattern, which the app's AGP 9 / Gradle 9 toolchain can no
+// longer evaluate (jcenter() is gone, and a subproject declaring its own AGP
+// classpath conflicts with the root project's centralized plugin management
+// in android/settings.gradle.kts). This version instead relies on the plugin
+// version already resolved by the root project, exactly like every other
+// Flutter plugin's build.gradle does under modern AGP. Gradle requires the
+// plugins {} block to be the first statement in the file (only buildscript {}
+// / pluginManagement {} may precede it), so it comes before group/version.
+plugins {
+    id 'com.android.library'
+}
+
+group 'dev.bessems.usbserial'
+version '1.0'
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://jitpack.io" }
+    }
+
+    gradle.projectsEvaluated {
+        tasks.withType(JavaCompile) {
+            options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
+        }
+    }
+}
+
+android {
+    compileSdkVersion 33
+
+    namespace 'dev.bessems.usbserial'
+
+    defaultConfig {
+        minSdkVersion 16
+        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+    }
+    lintOptions {
+        disable 'InvalidPackage'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'com.github.felHR85:UsbSerial:6.1.0'
+}

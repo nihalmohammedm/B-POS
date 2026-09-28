@@ -16,6 +16,7 @@ dependencies:
   path_provider: ^2.1.6
   shared_preferences: ^2.5.5
   sqlite3: ^3.6.0
+  unified_esc_pos_printer: ^3.4.0
 flutter:
   uses-material-design: true
 dev_dependencies:
@@ -24,3 +25,12 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter
+
+# usb_serial 0.5.2 (pulled in transitively by unified_esc_pos_printer for
+# Android USB OTG support) ships an android/build.gradle that's incompatible
+# with this project's AGP 9 / Gradle 9 toolchain (jcenter() + a per-module
+# buildscript classpath). Overridden to a locally vendored, patched copy —
+# see third_party/usb_serial/android/build.gradle for what changed.
+dependency_overrides:
+  usb_serial:
+    path: third_party/usb_serial

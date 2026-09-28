@@ -7,7 +7,7 @@ import '../widgets/common.dart';
 
 // ---------------- Customise (variants / add-ons) ----------------
 Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderLine? initial}) {
-  final quickNotes = StoreScope.read(context).quickNotes;
+  final quickNotes = m.kitchenNotes;
   String? variant = initial?.variant ?? (m.variants.isNotEmpty ? m.variants.first.name : null);
   final addons = <String>{...?initial?.addons};
   int qty = initial?.qty ?? 1;
@@ -139,7 +139,7 @@ Widget _addonTile(Addon a, bool on, VoidCallback onTap) => Material(
 
 // ---------------- Edit qty / note for simple items ----------------
 Future<OrderLine?> showNoteDialog(BuildContext context, OrderLine l) {
-  final quickNotes = StoreScope.read(context).quickNotes;
+  final quickNotes = l.item.kitchenNotes;
   int qty = l.qty;
   final c = TextEditingController(text: l.note);
   return showPanelDialog<OrderLine>(context,

@@ -70,6 +70,9 @@ class MenuItem {
   final bool veg, bestseller;
   final List<Variant> variants;
   final List<Addon> addons;
+  /// Per-item quick-tap kitchen note presets (e.g. "Dry", "Juicy" for a grilled item),
+  /// configured on the product in the backoffice — not a global list.
+  final List<String> kitchenNotes;
   const MenuItem({
     required this.id,
     required this.code,
@@ -81,6 +84,7 @@ class MenuItem {
     this.bestseller = false,
     this.variants = const [],
     this.addons = const [],
+    this.kitchenNotes = const [],
   });
 
   bool get customizable => variants.isNotEmpty || addons.isNotEmpty;
@@ -105,7 +109,8 @@ class MenuItem {
       veg == other.veg &&
       bestseller == other.bestseller &&
       listEquals(variants, other.variants) &&
-      listEquals(addons, other.addons);
+      listEquals(addons, other.addons) &&
+      listEquals(kitchenNotes, other.kitchenNotes);
 
   @override
   int get hashCode => Object.hash(id, code, cat, name, desc, price, veg, bestseller);
@@ -121,6 +126,7 @@ class MenuItem {
         'bestseller': bestseller,
         'variants': variants.map((v) => v.toJson()).toList(),
         'addons': addons.map((a) => a.toJson()).toList(),
+        'kitchenNotes': kitchenNotes,
       };
 
   factory MenuItem.fromJson(Map<String, dynamic> j) => MenuItem(
@@ -134,6 +140,7 @@ class MenuItem {
         bestseller: j['bestseller'] as bool? ?? false,
         variants: (j['variants'] as List? ?? []).map((e) => Variant.fromJson(e as Map<String, dynamic>)).toList(),
         addons: (j['addons'] as List? ?? []).map((e) => Addon.fromJson(e as Map<String, dynamic>)).toList(),
+        kitchenNotes: (j['kitchenNotes'] as List? ?? []).map((e) => e as String).toList(),
       );
 }
 

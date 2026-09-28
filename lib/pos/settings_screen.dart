@@ -11,7 +11,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final TextEditingController _url, _key, _outlet, _note;
+  late final TextEditingController _url, _key, _outlet;
 
   @override
   void initState() {
@@ -20,7 +20,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _url = TextEditingController(text: s.backofficeUrl);
     _key = TextEditingController(text: s.backofficeKey);
     _outlet = TextEditingController(text: s.backofficeOutletCode);
-    _note = TextEditingController();
   }
 
   @override
@@ -28,15 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _url.dispose();
     _key.dispose();
     _outlet.dispose();
-    _note.dispose();
     super.dispose();
-  }
-
-  void _addNote(Store s) {
-    final v = _note.text.trim();
-    if (v.isEmpty) return;
-    s.addQuickNote(v);
-    _note.clear();
   }
 
   void _saveConnection(Store s) {
@@ -91,8 +82,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 16),
                       _printersPanel(s),
                       const SizedBox(height: 16),
-                      _notesPanel(s),
-                      const SizedBox(height: 16),
                       _overviewPanel(s),
                     ]),
                   ),
@@ -136,6 +125,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final last = s.lastMenuSync;
     return Panel(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Dot(color: s.isOnline ? C.green : C.faint, size: 8),
+          const SizedBox(width: 6),
+          Text(s.isOnline ? 'Online' : 'Offline', style: ts(12, w: w5, c: s.isOnline ? C.greenInk : C.muted)),
+          if (s.isOnline && s.autoSyncEnabled) ...[
+            const SizedBox(width: 6),
+            Text('· syncs automatically in the background', style: ts(12, c: C.muted)),
+          ],
+          const Spacer(),
+          Text('Auto-sync', style: ts(12, c: C.muted)),
+          const SizedBox(width: 8),
+          Toggle(value: s.autoSyncEnabled, scale: .72, onChanged: (v) => s.setAutoSync(v)),
+        ]),
+        const SizedBox(height: 14),
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -189,42 +192,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Pill('${p.name} · ${[if (p.forBill) 'Bill', if (p.forKot) 'KOT'].join('/')}', bg: C.soft),
             ]),
           ],
-        ]),
-      );
-
-  Widget _notesPanel(Store s) => Panel(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Kitchen notes', style: ts(17, w: w5)),
-          const SizedBox(height: 4),
-          Text('Quick-tap presets shown when adding a note to an item.', style: ts(13, c: C.muted, h: 1.4)),
-          const SizedBox(height: 14),
-          if (s.quickNotes.isEmpty)
-            Text('No presets yet', style: ts(13, c: C.muted))
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final n in s.quickNotes)
-                  InputChip(
-                    label: Text(n, style: ts(13)),
-                    backgroundColor: C.soft,
-                    side: BorderSide.none,
-                    onDeleted: () => s.removeQuickNote(n),
-                  ),
-              ],
-            ),
-          const SizedBox(height: 14),
-          Row(children: [
-            Expanded(
-                child: TextField(
-                    controller: _note,
-                    style: ts(14),
-                    decoration: const InputDecoration(hintText: 'e.g. No garlic'),
-                    onSubmitted: (_) => _addNote(s))),
-            const SizedBox(width: 10),
-            Btn.outline('Add', onTap: () => _addNote(s)),
-          ]),
         ]),
       );
 

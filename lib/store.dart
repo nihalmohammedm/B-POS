@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'backoffice_api.dart';
+import 'db/app_database.dart';
 import 'models.dart';
 
 class Store extends ChangeNotifier {
@@ -23,22 +25,9 @@ class Store extends ChangeNotifier {
   final List<Order> history = [];
   final List<Kot> kots = [];
   final List<PosPrinter> printers = [];
-  List<String> quickNotes = ['No onions', 'Extra spicy', 'Less oil', 'Pack separately'];
   int _orderSeq = 0, _kotSeq = 0, _billSeq = 0, _taSeq = 0, _printerSeq = 0;
 
   void touch() => notifyListeners();
-
-  void addQuickNote(String note) {
-    final v = note.trim();
-    if (v.isEmpty || quickNotes.contains(v)) return;
-    quickNotes.add(v);
-    notifyListeners();
-  }
-
-  void removeQuickNote(String note) {
-    quickNotes.remove(note);
-    notifyListeners();
-  }
 
   // ---------- debounced operational save ----------
   Timer? _saveDebounce;
@@ -49,142 +38,203 @@ class Store extends ChangeNotifier {
     _saveDebounce = Timer(const Duration(milliseconds: 500), _saveOperational);
   }
 
-  // ---------- local persistence ----------
-  // Keeps a synced menu/printer setup across app restarts, so re-opening the APK
-  // doesn't fall back to the bundled demo data and force a re-sync every time.
-  static const _kMenu = 'menu', _kCategories = 'categories', _kLastSync = 'lastMenuSync';
-  static const _kPrinters = 'printers';
-  static const _kTables = 'tables';
-  static const _kUrl = 'backofficeUrl', _kKey = 'backofficeKey', _kOutlet = 'backofficeOutletCode';
-  static const _kOutletName = 'outletName', _kOutletAddress = 'outletAddress', _kOutletPhone = 'outletPhone';
-  static const _kOrders = 'orders', _kKots = 'kots', _kHistory = 'history';
-  static const _kItemOff = 'itemOff', _kCatOff = 'catOff', _kStock = 'stock';
-  static const _kQuickNotes = 'quickNotes', _kCounters = 'counters';
+  // ---------- local persistence (Drift/SQLite) ----------
+  // A real local database, not just a bag of shared_preferences strings — every
+  // collection is its own table (one row per entity, id + JSON payload, see
+  // lib/db/app_database.dart), so a single changed order no longer means
+  // re-serializing every order. Keeps a synced menu/printer/order setup across
+  // app restarts, so re-opening the app doesn't fall back to empty state.
+  final AppDatabase _db = AppDatabase();
+
+  Future<String?> _getSetting(String key) async {
+    final row = await (_db.select(_db.settingsRows)..where((t) => t.key.equals(key))).getSingleOrNull();
+    return row?.value;
+  }
+
+  Future<void> _setSetting(String key, String value) async {
+    await _db.into(_db.settingsRows).insertOnConflictUpdate(SettingsRowsCompanion.insert(key: key, value: value));
+  }
 
   Future<void> _loadPersisted() async {
-    final sp = await SharedPreferences.getInstance();
+    backofficeUrl = await _getSetting('backofficeUrl') ?? backofficeUrl;
+    backofficeKey = await _getSetting('backofficeKey') ?? backofficeKey;
+    backofficeOutletCode = await _getSetting('backofficeOutletCode') ?? backofficeOutletCode;
+    outletName = await _getSetting('outletName') ?? outletName;
+    outletAddress = await _getSetting('outletAddress') ?? outletAddress;
+    outletPhone = await _getSetting('outletPhone') ?? outletPhone;
 
-    backofficeUrl = sp.getString(_kUrl) ?? backofficeUrl;
-    backofficeKey = sp.getString(_kKey) ?? backofficeKey;
-    backofficeOutletCode = sp.getString(_kOutlet) ?? backofficeOutletCode;
-    outletName = sp.getString(_kOutletName) ?? outletName;
-    outletAddress = sp.getString(_kOutletAddress) ?? outletAddress;
-    outletPhone = sp.getString(_kOutletPhone) ?? outletPhone;
-
-    final menuJson = sp.getString(_kMenu);
-    final cats = sp.getStringList(_kCategories);
-    if (menuJson != null && cats != null) {
-      final items = (jsonDecode(menuJson) as List).map((e) => MenuItem.fromJson(e as Map<String, dynamic>)).toList();
+    final menuRows = await _db.select(_db.menuItemRows).get();
+    final catRows = await (_db.select(_db.categoryRows)
+          ..orderBy([(t) => OrderingTerm(expression: t.displayOrder)]))
+        .get();
+    final hasMenuCache = menuRows.isNotEmpty;
+    if (hasMenuCache) {
       menu
         ..clear()
-        ..addAll(items);
-      categories = cats;
+        ..addAll(menuRows.map((r) => MenuItem.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+      categories = catRows.map((r) => r.name).toList();
     }
-    final syncStr = sp.getString(_kLastSync);
+    final syncStr = await _getSetting('lastMenuSync');
     if (syncStr != null) lastMenuSync = DateTime.tryParse(syncStr);
 
-    final printersJson = sp.getString(_kPrinters);
-    if (printersJson != null) {
-      final saved = (jsonDecode(printersJson) as List).map((e) => PosPrinter.fromJson(e as Map<String, dynamic>)).toList();
-      printers
-        ..clear()
-        ..addAll(saved);
+    final printerRows = await _db.select(_db.printerRows).get();
+    printers
+      ..clear()
+      ..addAll(printerRows.map((r) => PosPrinter.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+
+    final tableRows = await _db.select(_db.diningTableRows).get();
+    tables
+      ..clear()
+      ..addAll(tableRows.map((r) => TableModel.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+
+    final orderRows = await _db.select(_db.orderRows).get();
+    orders.addAll(orderRows.map((r) => Order.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+
+    final kotRows = await _db.select(_db.kotRows).get();
+    kots.addAll(kotRows.map((r) => Kot.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+
+    final historyRows = await _db.select(_db.historyRows).get();
+    history.addAll(historyRows.map((r) => Order.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+
+    final itemOffRows = await _db.select(_db.itemOffRows).get();
+    itemOff.addAll(itemOffRows.map((r) => r.id));
+    final catOffRows = await _db.select(_db.catOffRows).get();
+    catOff.addAll(catOffRows.map((r) => r.id));
+
+    final stockRows = await _db.select(_db.stockRows).get();
+    for (final r in stockRows) {
+      stock[r.itemId] = r.qty;
     }
 
-    final tablesJson = sp.getString(_kTables);
-    if (tablesJson != null) {
-      final saved = (jsonDecode(tablesJson) as List).map((e) => TableModel.fromJson(e as Map<String, dynamic>)).toList();
-      tables
-        ..clear()
-        ..addAll(saved);
-    }
-
-    final ordersJson = sp.getString(_kOrders);
-    if (ordersJson != null) {
-      orders.addAll((jsonDecode(ordersJson) as List).map((e) => Order.fromJson(e as Map<String, dynamic>)));
-    }
-    final kotsJson = sp.getString(_kKots);
-    if (kotsJson != null) {
-      kots.addAll((jsonDecode(kotsJson) as List).map((e) => Kot.fromJson(e as Map<String, dynamic>)));
-    }
-    final historyJson = sp.getString(_kHistory);
-    if (historyJson != null) {
-      history.addAll((jsonDecode(historyJson) as List).map((e) => Order.fromJson(e as Map<String, dynamic>)));
-    }
-    final itemOffList = sp.getStringList(_kItemOff);
-    if (itemOffList != null) itemOff.addAll(itemOffList);
-    final catOffList = sp.getStringList(_kCatOff);
-    if (catOffList != null) catOff.addAll(catOffList);
-    final stockJson = sp.getString(_kStock);
-    if (stockJson != null) {
-      (jsonDecode(stockJson) as Map<String, dynamic>).forEach((k, v) => stock[k] = v as int);
-    }
-    final savedNotes = sp.getStringList(_kQuickNotes);
-    if (savedNotes != null) quickNotes = savedNotes;
-    final countersJson = sp.getString(_kCounters);
-    if (countersJson != null) {
-      final c = jsonDecode(countersJson) as Map<String, dynamic>;
-      _orderSeq = c['orderSeq'] as int? ?? _orderSeq;
-      _kotSeq = c['kotSeq'] as int? ?? _kotSeq;
-      _billSeq = c['billSeq'] as int? ?? _billSeq;
-      _taSeq = c['taSeq'] as int? ?? _taSeq;
-    }
+    _orderSeq = int.tryParse(await _getSetting('orderSeq') ?? '') ?? _orderSeq;
+    _kotSeq = int.tryParse(await _getSetting('kotSeq') ?? '') ?? _kotSeq;
+    _billSeq = int.tryParse(await _getSetting('billSeq') ?? '') ?? _billSeq;
+    _taSeq = int.tryParse(await _getSetting('taSeq') ?? '') ?? _taSeq;
     notifyListeners();
 
     // First-ever launch (nothing cached yet): pull the real menu straight away instead
     // of sitting empty until someone finds Settings.
-    if (menuJson == null) {
+    if (!hasMenuCache) {
       try {
         await syncMenu();
       } catch (_) {
         // Stays empty with lastSyncError set; Settings surfaces it for a manual retry.
       }
     }
+
+    _wireBackgroundSync();
   }
 
   Future<void> _saveMenu() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kMenu, jsonEncode(menu.map((m) => m.toJson()).toList()));
-    await sp.setStringList(_kCategories, categories);
-    if (lastMenuSync != null) await sp.setString(_kLastSync, lastMenuSync!.toIso8601String());
-    await sp.setString(_kOutletName, outletName);
-    await sp.setString(_kOutletAddress, outletAddress);
-    await sp.setString(_kOutletPhone, outletPhone);
+    await _db.batch((b) {
+      b.deleteAll(_db.menuItemRows);
+      b.insertAll(_db.menuItemRows,
+          menu.map((m) => MenuItemRowsCompanion.insert(id: m.id, json: jsonEncode(m.toJson()))));
+      b.deleteAll(_db.categoryRows);
+      b.insertAll(_db.categoryRows, [
+        for (var i = 0; i < categories.length; i++) CategoryRowsCompanion.insert(name: categories[i], displayOrder: i),
+      ]);
+    });
+    if (lastMenuSync != null) await _setSetting('lastMenuSync', lastMenuSync!.toIso8601String());
+    await _setSetting('outletName', outletName);
+    await _setSetting('outletAddress', outletAddress);
+    await _setSetting('outletPhone', outletPhone);
   }
 
   Future<void> _savePrinters() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kPrinters, jsonEncode(printers.map((p) => p.toJson()).toList()));
+    await _db.batch((b) {
+      b.deleteAll(_db.printerRows);
+      b.insertAll(
+          _db.printerRows, printers.map((p) => PrinterRowsCompanion.insert(id: p.id, json: jsonEncode(p.toJson()))));
+    });
   }
 
   Future<void> _saveTables() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kTables, jsonEncode(tables.map((t) => t.toJson()).toList()));
+    await _db.batch((b) {
+      b.deleteAll(_db.diningTableRows);
+      b.insertAll(_db.diningTableRows,
+          tables.map((t) => DiningTableRowsCompanion.insert(id: t.id, json: jsonEncode(t.toJson()))));
+    });
   }
 
   /// Everything that changes during a shift — active/settled orders, KOTs, seated
-  /// parties, availability toggles, stock, quick notes, sequence counters — saved as
-  /// one debounced bundle (see the `notifyListeners` override) so nothing needs its
+  /// parties, availability toggles, stock, sequence counters — saved as one
+  /// debounced bundle (see the `notifyListeners` override) so nothing needs its
   /// own explicit save call at every call site.
   Future<void> _saveOperational() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kOrders, jsonEncode(orders.map((o) => o.toJson()).toList()));
-    await sp.setString(_kKots, jsonEncode(kots.map((k) => k.toJson()).toList()));
-    await sp.setString(_kHistory, jsonEncode(history.map((o) => o.toJson()).toList()));
-    await sp.setString(_kTables, jsonEncode(tables.map((t) => t.toJson()).toList()));
-    await sp.setStringList(_kItemOff, itemOff.toList());
-    await sp.setStringList(_kCatOff, catOff.toList());
-    await sp.setString(_kStock, jsonEncode(stock));
-    await sp.setStringList(_kQuickNotes, quickNotes);
-    await sp.setString(_kCounters,
-        jsonEncode({'orderSeq': _orderSeq, 'kotSeq': _kotSeq, 'billSeq': _billSeq, 'taSeq': _taSeq}));
+    await _db.batch((b) {
+      b.deleteAll(_db.orderRows);
+      b.insertAll(_db.orderRows,
+          orders.map((o) => OrderRowsCompanion.insert(id: Value(o.id), json: jsonEncode(o.toJson()))));
+
+      b.deleteAll(_db.kotRows);
+      b.insertAll(
+          _db.kotRows, kots.map((k) => KotRowsCompanion.insert(no: Value(k.no), json: jsonEncode(k.toJson()))));
+
+      b.deleteAll(_db.historyRows);
+      b.insertAll(_db.historyRows,
+          history.map((o) => HistoryRowsCompanion.insert(id: Value(o.id), json: jsonEncode(o.toJson()))));
+
+      b.deleteAll(_db.diningTableRows);
+      b.insertAll(_db.diningTableRows,
+          tables.map((t) => DiningTableRowsCompanion.insert(id: t.id, json: jsonEncode(t.toJson()))));
+
+      b.deleteAll(_db.itemOffRows);
+      b.insertAll(_db.itemOffRows, itemOff.map((id) => ItemOffRowsCompanion.insert(id: id)));
+
+      b.deleteAll(_db.catOffRows);
+      b.insertAll(_db.catOffRows, catOff.map((id) => CatOffRowsCompanion.insert(id: id)));
+
+      b.deleteAll(_db.stockRows);
+      b.insertAll(_db.stockRows, stock.entries.map((e) => StockRowsCompanion.insert(itemId: e.key, qty: e.value)));
+    });
+    await _setSetting('orderSeq', '$_orderSeq');
+    await _setSetting('kotSeq', '$_kotSeq');
+    await _setSetting('billSeq', '$_billSeq');
+    await _setSetting('taSeq', '$_taSeq');
   }
 
   Future<void> _saveBackofficeConfig() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kUrl, backofficeUrl);
-    await sp.setString(_kKey, backofficeKey);
-    await sp.setString(_kOutlet, backofficeOutletCode);
+    await _setSetting('backofficeUrl', backofficeUrl);
+    await _setSetting('backofficeKey', backofficeKey);
+    await _setSetting('backofficeOutletCode', backofficeOutletCode);
+  }
+
+  // ---------- background sync ----------
+  bool isOnline = true;
+  bool autoSyncEnabled = true;
+  DateTime? lastSyncAttempt;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  Timer? _periodicSyncTimer;
+
+  void _wireBackgroundSync() {
+    Connectivity().checkConnectivity().then((r) => _applyConnectivity(r, triggerSync: false));
+    _connectivitySub = Connectivity().onConnectivityChanged.listen(_applyConnectivity);
+    _periodicSyncTimer = Timer.periodic(const Duration(minutes: 15), (_) => _backgroundSync());
+  }
+
+  void _applyConnectivity(List<ConnectivityResult> result, {bool triggerSync = true}) {
+    final wasOnline = isOnline;
+    isOnline = result.any((r) => r != ConnectivityResult.none);
+    notifyListeners();
+    if (triggerSync && isOnline && !wasOnline) _backgroundSync();
+  }
+
+  Future<void> _backgroundSync() async {
+    if (!autoSyncEnabled || !isOnline || syncingMenu) return;
+    try {
+      await syncMenu();
+    } catch (_) {
+      // lastSyncError is already set by syncMenu; Settings surfaces it.
+    }
+  }
+
+  @override
+  void dispose() {
+    _connectivitySub?.cancel();
+    _periodicSyncTimer?.cancel();
+    _saveDebounce?.cancel();
+    super.dispose();
   }
 
   // ---------- printers ----------
@@ -242,11 +292,17 @@ class Store extends ChangeNotifier {
     _saveBackofficeConfig();
   }
 
+  void setAutoSync(bool on) {
+    autoSyncEnabled = on;
+    notifyListeners();
+  }
+
   /// Pulls the active menu for [backofficeOutletCode] from the backoffice (a self-hosted
   /// Supabase/PostgREST instance, `bpos` schema) and replaces the local menu with it.
   Future<MenuSyncResult> syncMenu() async {
     syncingMenu = true;
     lastSyncError = null;
+    lastSyncAttempt = DateTime.now();
     notifyListeners();
     try {
       final result =

@@ -150,6 +150,11 @@ class BackofficeApi {
         }
       }
       final basePrice = (p['base_price'] as num?)?.toDouble();
+      final kitchenNotes = ((p['kitchen_notes'] as String?) ?? '')
+          .split('|')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
       items.add(MenuItem(
         id: pid,
         code: p['item_code'] as String? ?? '',
@@ -157,8 +162,10 @@ class BackofficeApi {
         name: p['name'] as String,
         desc: p['description'] as String? ?? '',
         price: basePrice ?? (itemVariants.isNotEmpty ? itemVariants.first.price : 0),
+        veg: (p['type'] as String?) == 'veg',
         variants: itemVariants,
         addons: itemAddons,
+        kitchenNotes: kitchenNotes,
       ));
     }
 

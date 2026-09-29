@@ -7,6 +7,7 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
+  audioplayers: ^6.8.1
   connectivity_plus: ^7.3.1
   crypto: ^3.0.6
   drift: ^2.35.0
@@ -14,11 +15,15 @@ dependencies:
     sdk: flutter
   flutter_secure_storage: ^11.2.0
   http: ^1.6.0
+  mobile_scanner: ^7.4.2
   path: ^1.9.1
   path_provider: ^2.1.6
+  qr_flutter: ^4.1.0
   shared_preferences: ^2.5.5
   sqlite3: ^3.6.0
   unified_esc_pos_printer: ^3.4.0
+  wakelock_plus: ^1.8.0
+  web_socket_channel: ^3.0.3
 flutter:
   uses-material-design: true
 dev_dependencies:

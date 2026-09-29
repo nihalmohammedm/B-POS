@@ -1,9 +1,12 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/keys.dart';
+import 'item_amend.dart';
 import 'payment.dart';
 
 class TablesScreen extends StatefulWidget {
@@ -23,7 +26,46 @@ class _TablesScreenState extends State<TablesScreen> {
     final floors = s.floors;
     if (floor == null || !floors.contains(floor)) floor = floors.isEmpty ? null : floors.first;
     if (sel == null && s.tables.isNotEmpty) sel = s.tables.first.id;
-    return LayoutBuilder(builder: (c, cons) {
+    final onFloor = floor == null ? const <TableModel>[] : s.tablesOn(floor!);
+    void move(int d) {
+      if (onFloor.isEmpty) return;
+      final i = onFloor.indexWhere((t) => t.id == sel);
+      setState(() => sel = onFloor[(i + d).clamp(0, onFloor.length - 1)].id);
+    }
+
+    void stepFloor(int d) {
+      if (floors.isEmpty) return;
+      final i = floors.indexOf(floor!);
+      final f = floors[(i + d) % floors.length];
+      final first = s.tablesOn(f);
+      setState(() {
+        floor = f;
+        if (first.isNotEmpty) sel = first.first.id;
+      });
+    }
+
+    /// Enter: straight into the running order when the table has one party,
+    /// otherwise open the table to seat or pick a party.
+    void open() {
+      if (sel == null) return;
+      final t = s.table(sel!);
+      if (t.parties.length == 1) {
+        final o = s.orderOfParty(t, t.parties.first);
+        if (o != null && !o.billed) return widget.onAddItems(o);
+      }
+      _openDetails(t.id);
+    }
+
+    final keys = [
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowRight), () => move(1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowDown), () => move(1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowLeft), () => move(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowUp), () => move(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.pageDown), () => stepFloor(1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.pageUp), () => stepFloor(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.enter), open),
+    ];
+    return KeyScope(autofocus: true, keys: keys, child: LayoutBuilder(builder: (c, cons) {
       final wide = cons.maxWidth >= 1000;
       final area = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Wrap(spacing: 14, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -77,7 +119,7 @@ class _TablesScreenState extends State<TablesScreen> {
               : TableDetails(key: ValueKey(sel), tableId: sel!, onAddItems: widget.onAddItems),
         ),
       ]);
-    });
+    }));
   }
 
   void _openDetails(String id) => showPanelDialog(context,
@@ -352,11 +394,11 @@ class _TableDetailsState extends State<TableDetails> {
         onInc: t.free > 0 ? () => s.setPax(t, p, p.pax + 1) : null,
       ),
     ]);
-    if (o == null || o.lines.isEmpty) {
+    if (o == null || o.liveLines.isEmpty) {
       return [
         head,
         const SizedBox(height: 16),
-        Text('No items yet', textAlign: TextAlign.center, style: ts(14, c: C.muted)),
+        Text(o != null && o.lines.isNotEmpty ? 'All items cancelled' : 'No items yet', textAlign: TextAlign.center, style: ts(14, c: C.muted)),
         const SizedBox(height: 14),
         Row(children: [
           Btn.outline('Free seats', onTap: () => s.freeParty(t, p)),
@@ -378,30 +420,7 @@ class _TableDetailsState extends State<TableDetails> {
         ),
       const Label('Order items'),
       const SizedBox(height: 8),
-      for (final l in o.lines)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(
-              width: 36,
-              height: 30,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: C.line)),
-              child: Text('x${l.qty}', style: ts(13)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Expanded(child: Text(l.item.name, style: ts(15, w: w5))),
-                Text(inr(l.total), style: ts(15)),
-              ]),
-              if (l.optText.isNotEmpty) Text(l.optText, style: ts(12, c: C.skyInk)),
-              const SizedBox(height: 4),
-              Pill(l.state.label, bg: lineStateColors(l.state).$1, fg: lineStateColors(l.state).$2, border: C.line),
-            ])),
-          ]),
-        ),
+      for (final l in o.lines) SentLineRow(o, l),
       const SizedBox(height: 4),
       Container(
         padding: const EdgeInsets.all(14),

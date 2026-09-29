@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
+import 'item_amend.dart';
 import 'payment.dart';
 
 class OrdersScreen extends StatefulWidget {
@@ -17,6 +20,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
   OrderType? typeF;
   String q = '';
   int? selId;
+  final _searchF = FocusNode(debugLabel: 'orders search');
+
+  @override
+  void dispose() {
+    _searchF.dispose();
+    super.dispose();
+  }
 
   bool _match(Order o) {
     final x = q.trim().toLowerCase();
@@ -36,7 +46,29 @@ class _OrdersScreenState extends State<OrdersScreen> {
     sel ??= list.isEmpty ? null : list.first;
     int count(OrderType? t) => all.where((o) => t == null || o.type == t).length;
 
-    return LayoutBuilder(builder: (c, cons) {
+    final o = sel;
+    final keys = [
+      ...listKeys<Order>(
+          items: list, selected: o, select: (x) => setState(() => selId = x.id), search: _searchF, filter: (t) => setState(() => typeF = t)),
+      if (o != null) ...[
+        Hotkey(const SingleActivator(LogicalKeyboardKey.enter), () {
+          final (_, act) = OrderDetail(orderId: o.id, onAddItems: widget.onAddItems)._primary(context, s, o, s.stageOf(o));
+          act();
+        }),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.keyP, control: true), () => printBillFlow(context, o)),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.keyK, control: true), () {
+          final k = s.lastKot(o);
+          if (k != null) showPrintPreview(context, kot: ReceiptData.kot(s, o, k, reprint: true), subtitle: '${s.titleOf(o)} · reprint');
+        }),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.insert), () => widget.onAddItems(o),
+            when: () => !o.billed && o.type != OrderType.delivery),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.keyR, control: true), () => reopenFlow(context, o), when: () => o.billed),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.delete, control: true), () => cancelOrderFlow(context, o),
+            when: () => s.canCancel(o)),
+      ],
+    ];
+
+    return KeyScope(autofocus: true, keys: keys, child: LayoutBuilder(builder: (c, cons) {
       final wide = cons.maxWidth >= 980;
       final pane = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -55,8 +87,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
           SizedBox(
             width: 260,
             child: TextField(
+              focusNode: _searchF,
               onChanged: (v) => setState(() => q = v),
-              decoration: const InputDecoration(hintText: 'Search orders', prefixIcon: Icon(Icons.search, size: 20)),
+              decoration: InputDecoration(hintText: hasKeyboard ? 'Search orders   /' : 'Search orders', prefixIcon: const Icon(Icons.search, size: 20)),
             ),
           ),
         ]),
@@ -82,7 +115,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             width: 380,
             child: sel == null ? const SizedBox() : OrderDetail(key: ValueKey(sel.id), orderId: sel.id, onAddItems: widget.onAddItems)),
       ]);
-    });
+    }));
   }
 
   Widget _row(Store s, Order o, bool on, bool wide) {
@@ -209,19 +242,11 @@ class OrderDetail extends StatelessWidget {
         const Divider(height: 1),
         Expanded(
           child: ListView(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8), children: [
-            for (final l in o.lines)
+            for (final l in o.lines) SentLineRow(o, l),
+            if (s.canAmend(o) && o.lines.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 9),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  SizedBox(width: 30, child: Text('${l.qty}×', style: ts(14, c: C.muted))),
-                  Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(l.item.name, style: ts(15)),
-                    if (l.optText.isNotEmpty) Text(l.optText, style: ts(13, c: C.muted)),
-                    Text(l.state.label, style: ts(12, c: lineStateColors(l.state).$2)),
-                  ])),
-                  Text(inr(l.total), style: ts(15)),
-                ]),
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('Tap an item to edit or cancel it', style: ts(12, c: C.muted)),
               ),
           ]),
         ),
@@ -230,7 +255,9 @@ class OrderDetail extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
-              Expanded(child: Text(o.billed ? 'Bill ${o.billNo} · unpaid' : o.payNote, style: ts(14, c: C.ink2))),
+              Expanded(
+                  child: Text(o.isPaid ? '${o.payNote}${o.billNo == null ? '' : ' · Bill ${o.billNo}'}' : (o.billed ? 'Bill ${o.billNo} · unpaid' : o.payNote),
+                      style: ts(14, c: o.isPaid ? C.greenInk : C.ink2))),
               Text(inr(o.total), style: ts(22, w: w6)),
             ]),
             const SizedBox(height: 14),
@@ -251,17 +278,14 @@ class OrderDetail extends StatelessWidget {
                     case 'reopen':
                       reopenFlow(context, o);
                     case 'cancel':
-                      {
-                        final title = s.titleOf(o);
-                        if (s.cancel(o)) toast(context, '$title cancelled');
-                      }
+                      cancelOrderFlow(context, o);
                   }
                 },
                 itemBuilder: (_) => [
                   if (!o.billed && o.type != OrderType.delivery) const PopupMenuItem(value: 'add', child: Text('Add items')),
                   if (kot != null) const PopupMenuItem(value: 'kot', child: Text('Reprint KOT')),
                   const PopupMenuItem(value: 'bill', child: Text('Print bill')),
-                  if (o.billed) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
+                  if (o.billed && !o.isPaid) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
                   PopupMenuItem(
                       value: 'cancel',
                       enabled: s.canCancel(o),

@@ -19,7 +19,8 @@ class BackofficeMenu {
   final List<MenuItem> items;
   final OutletInfo outlet;
   final List<TableModel> tables;
-  BackofficeMenu(this.categories, this.items, this.outlet, this.tables);
+  final List<KotGroup> kotGroups;
+  BackofficeMenu(this.categories, this.items, this.outlet, this.tables, this.kotGroups);
 }
 
 /// Talks to the `bpos` schema of a self-hosted Supabase/PostgREST backend.
@@ -83,13 +84,25 @@ class BackofficeApi {
         }()
     ];
 
+    final groupRows = await _get('kot_groups', {
+      'select': 'id,code,name,display_order',
+      'outlet_id': 'eq.$outletId',
+      'is_active': 'eq.true',
+      'order': 'display_order.asc',
+    });
+    final kotGroups = [
+      for (final g in groupRows)
+        KotGroup(g['id'] as String, g['code'] as String? ?? '', g['name'] as String, g['display_order'] as int? ?? 0),
+    ];
+    final activeGroups = {for (final g in kotGroups) g.id};
+
     final products = await _get('products', {
       'select': '*',
       'outlet_id': 'eq.$outletId',
       'is_active': 'eq.true',
       'order': 'display_order.asc',
     });
-    if (products.isEmpty) return BackofficeMenu(categoryNames, [], outlet, tables);
+    if (products.isEmpty) return BackofficeMenu(categoryNames, [], outlet, tables, kotGroups);
     final productIds = [for (final p in products) p['id'] as String];
     final idsIn = 'in.(${productIds.join(',')})';
 
@@ -102,6 +115,17 @@ class BackofficeApi {
     final variantsByProduct = <String, List<dynamic>>{};
     for (final v in variants) {
       variantsByProduct.putIfAbsent(v['product_id'] as String, () => []).add(v);
+    }
+
+    // One group per product; a product mapped to several keeps the first by group order.
+    final pkg = await _get('product_kot_groups', {'select': 'product_id,kot_group_id', 'product_id': idsIn});
+    final groupOrder = {for (final g in kotGroups) g.id: g.order};
+    final groupByProduct = <String, String>{};
+    for (final r in pkg) {
+      final pid = r['product_id'] as String, gid = r['kot_group_id'] as String;
+      if (!activeGroups.contains(gid)) continue;
+      final cur = groupByProduct[pid];
+      if (cur == null || (groupOrder[gid] ?? 0) < (groupOrder[cur] ?? 0)) groupByProduct[pid] = gid;
     }
 
     final pmg = await _get('product_modifier_groups', {'select': '*', 'product_id': idsIn});
@@ -141,7 +165,8 @@ class BackofficeApi {
     for (final p in products) {
       final pid = p['id'] as String;
       final itemVariants = [
-        for (final v in variantsByProduct[pid] ?? const []) Variant(v['name'] as String, (v['price'] as num).toDouble())
+        for (final v in variantsByProduct[pid] ?? const []) Variant(v['name'] as String, (v['price'] as num).toDouble(),
+              kotGroup: activeGroups.contains(v['kot_group_id']) ? v['kot_group_id'] as String : null)
       ];
       final itemAddons = <Addon>[];
       for (final gid in groupsByProduct[pid] ?? const <String>{}) {
@@ -166,9 +191,10 @@ class BackofficeApi {
         variants: itemVariants,
         addons: itemAddons,
         kitchenNotes: kitchenNotes,
+        kotGroup: groupByProduct[pid],
       ));
     }
 
-    return BackofficeMenu(categoryNames, items, outlet, tables);
+    return BackofficeMenu(categoryNames, items, outlet, tables, kotGroups);
   }
 }

@@ -5,12 +5,12 @@ import '../widgets/common.dart';
 import 'login_screen.dart';
 import 'pin_screen.dart';
 import 'profile_store.dart';
-import 'setup_owner_screen.dart';
 import 'supabase_auth_api.dart';
 
-enum _Stage { loading, error, setupOwner, login, addAnotherLogin, setPin, pinLock, authenticated }
+enum _Stage { loading, error, login, addAnotherLogin, setPin, pinLock, authenticated }
 
-/// BPOS's home screen: decides between first-run owner setup, a plain
+/// BPOS's home screen: staff accounts already exist in Supabase (an admin creates
+/// them; the app never does), so this is a plain
 /// email+password login, the per-user PIN lock, or (once unlocked) the real
 /// [PosShell] — see CLAUDE.md-adjacent plan notes on per-user PIN profiles.
 /// The Captain app never uses this; it boots straight into its own UI.
@@ -58,11 +58,10 @@ class _AuthGateState extends State<AuthGate> {
     try {
       final s = StoreScope.of(context);
       final outletId = await _api().resolveOutletId(s.backofficeOutletCode);
-      final hasUsers = await _api().outletHasAnyUser(outletId);
       if (!mounted) return;
       setState(() {
         _outletId = outletId;
-        _stage = hasUsers ? _Stage.login : _Stage.setupOwner;
+        _stage = _Stage.login;
       });
     } catch (e) {
       if (!mounted) return;
@@ -117,27 +116,11 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
-  Future<String?> _submitSetupOwner(String fullName, String email, String password) async {
-    try {
-      final outletId = await _ensureOutletId();
-      final session = await _api().signUp(email: email, password: password);
-      final profile =
-          await _api().createOwnerProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId, fullName: fullName);
-      await _afterAuthenticated(session: session, profile: profile);
-      return null;
-    } catch (e) {
-      return e.toString();
-    }
-  }
-
   Future<String?> _submitLogin(String email, String password) async {
     try {
       final outletId = await _ensureOutletId();
       final session = await _api().signInWithPassword(email: email, password: password);
       final profile = await _api().fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId);
-      if (profile == null) {
-        return "This account isn't set up for this outlet yet. Contact your manager.";
-      }
       await _afterAuthenticated(session: session, profile: profile);
       return null;
     } catch (e) {
@@ -165,14 +148,9 @@ class _AuthGateState extends State<AuthGate> {
     try {
       final outletId = await _ensureOutletId();
       final session = await _api().refreshSession(profile.refreshToken);
+      // Throws if no longer linked to this outlet: the catch below then falls
+      // back to a full login instead of letting a de-authorized profile in.
       final profileInfo = await _api().fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId);
-      if (profileInfo == null) {
-        // No longer linked to this outlet — fall back to a full re-login instead
-        // of silently letting a de-authorized profile back in.
-        if (!mounted) return true;
-        setState(() => _stage = _Stage.login);
-        return true;
-      }
       if (!mounted) return true;
       final s = StoreScope.of(context);
       s.applySession(
@@ -228,9 +206,6 @@ class _AuthGateState extends State<AuthGate> {
             ),
           ),
         );
-
-      case _Stage.setupOwner:
-        return SetupOwnerScreen(outletName: s.outletName, onSubmit: _submitSetupOwner);
 
       case _Stage.login:
         return LoginScreen(outletName: s.outletName, onSubmit: _submitLogin);

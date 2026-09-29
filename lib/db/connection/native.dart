@@ -5,10 +5,10 @@ import 'package:drift/native.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-QueryExecutor openConnection() {
+QueryExecutor openConnection({String name = 'bistro_pos'}) {
   return LazyDatabase(() async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dir.path, 'bistro_pos.sqlite'));
+    final file = File(p.join(dir.path, '$name.sqlite'));
     return NativeDatabase.createInBackground(file);
   });
 }

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart' hide Thumb;
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
 import 'dialogs.dart';
+import 'payment.dart';
 
 class OrderTakingScreen extends StatefulWidget {
   final Order? target;
@@ -24,6 +27,8 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   Order? existing;
   bool _sheetOpen = false;
   final nameC = TextEditingController(), phoneC = TextEditingController(), addrC = TextEditingController();
+  final searchC = TextEditingController();
+  final searchF = FocusNode(debugLabel: 'menu search');
   final cart = <OrderLine>[];
   final _tick = ValueNotifier(0);
 
@@ -56,6 +61,8 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     nameC.dispose();
     phoneC.dispose();
     addrC.dispose();
+    searchC.dispose();
+    searchF.dispose();
     _tick.dispose();
     super.dispose();
   }
@@ -102,7 +109,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     }
   }
 
-  void confirm() {
+  /// Sends the cart to the kitchen. With [payNow] (takeaway only, optional)
+  /// the full amount is collected first, then the KOTs and a paid invoice print;
+  /// the order stays open until it's handed over.
+  Future<void> confirm({bool payNow = false}) async {
     final s = StoreScope.read(context);
     if (cart.isEmpty) return;
     Order o;
@@ -124,14 +134,36 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         return;
       }
       o = existing ?? s.draft(type);
+      if (o.billed) {
+        toast(context, o.isPaid ? 'Already paid · start a new takeaway order' : 'Bill already printed · reopen it first', error: true);
+        return;
+      }
+    }
+
+    List<Payment>? pays;
+    if (payNow) {
+      // What the invoice will total: anything already on the order plus this cart.
+      final whole = Order(id: 0, type: type)..lines.addAll([for (final l in [...o.liveLines, ...cart]) l.copy()]);
+      pays = await showPaymentDialog(context,
+          title: 'Take payment · ${nameC.text.trim().isEmpty ? type.label : nameC.text.trim()}',
+          subtitle: '${whole.itemCount} items · the order stays open until it\'s handed over',
+          total: whole.total);
+      if (pays == null || !mounted) return;
+    }
+
+    if (type != OrderType.dineIn) {
       o
         ..customer = nameC.text.trim()
         ..phone = phoneC.text.trim()
         ..address = addrC.text.trim();
     }
-    final k = s.sendKot(o, cart);
-    final kotData = ReceiptData.kot(s, o, k);
-    final billData = type != OrderType.dineIn ? ReceiptData.bill(s, o) : null;
+    final ks = s.sendKot(o, cart);
+    final kotData = [for (final k in ks) ReceiptData.kot(s, o, k)];
+    // Takeaway hands the guest a bill with the order: paid invoice if they paid
+    // now, otherwise the unpaid bill (it then waits on the Payments page).
+    final billNo = pays != null
+        ? s.prepay(o, pays)
+        : (type == OrderType.takeaway && s.printLayout.takeawayBillWithKot ? s.printBill(o) : null);
     if (_sheetOpen) Navigator.of(context).pop();
     setState(() {
       cart.clear();
@@ -143,12 +175,109 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       addrC.clear();
     });
     widget.onDone?.call();
-    showPrintPreview(context, kot: kotData, bill: billData, subtitle: '${s.labelOf(o)} · sent to kitchen');
+    final kotsOk = await printKotsWithToast(context, s, kotData);
+    if (billNo == null || !mounted) return;
+    try {
+      await printReceipt(s, ReceiptData.bill(s, o, no: billNo));
+      // Keep a KOT failure on screen rather than covering it with good news.
+      if (kotsOk && mounted) {
+        toast(context, 'KOT and ${pays != null ? 'paid invoice' : 'bill'} $billNo printed · ${s.labelOf(o)}');
+      }
+    } catch (e) {
+      if (mounted) {
+        toast(context, '${pays != null ? 'Paid · invoice' : 'Bill'} $billNo not printed · $e · reprint it from Orders', error: true);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final s = StoreScope.of(context);
+    return KeyScope(autofocus: true, keys: _keys(s), child: _layout(s));
+  }
+
+  // ---------------- keyboard ----------------
+  List<Hotkey> _keys(Store s) {
+    void setType(OrderType t) => setState(() {
+          type = t;
+          existing = null;
+        });
+    void bump(int d) {
+      if (cart.isEmpty) return;
+      setState(() {
+        final l = cart.last;
+        l.qty += d;
+        if (l.qty <= 0) cart.removeLast();
+      });
+    }
+
+    void stepCat(int d) {
+      final all = <String?>[null, ...s.categories];
+      final i = all.indexOf(cat);
+      setState(() => cat = all[(i + d) % all.length]);
+    }
+
+    Future<void> clearCart() async {
+      if (cart.isEmpty) return;
+      final ok = await confirmDialog(context,
+          title: 'Clear the cart?', body: '${cart.length} unsent items will be removed.', ok: 'Clear', okColor: C.red);
+      if (ok) setState(cart.clear);
+    }
+
+    return [
+      Hotkey(const CharacterActivator('/'), searchF.requestFocus),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.keyF, control: true), searchF.requestFocus),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.digit1, alt: true), () => setType(OrderType.dineIn)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.digit2, alt: true), () => setType(OrderType.takeaway)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.digit3, alt: true), () => setType(OrderType.delivery)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.keyT, control: true), pickTable, when: () => type == OrderType.dineIn),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.pageDown), () => stepCat(1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.pageUp), () => stepCat(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.keyV, alt: true), () => setState(() => vegOnly = !vegOnly)),
+      Hotkey(const CharacterActivator('+'), () => bump(1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.numpadAdd), () => bump(1)),
+      Hotkey(const CharacterActivator('-'), () => bump(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.numpadSubtract), () => bump(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.delete), () => bump(-(cart.isEmpty ? 0 : cart.last.qty))),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.delete, control: true), clearCart),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.enter, control: true), () => confirm(), when: () => cart.isNotEmpty),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.enter, control: true, shift: true), () => confirm(payNow: true),
+          when: () => cart.isNotEmpty && type == OrderType.takeaway),
+    ];
+  }
+
+  List<MenuItem> _matches(Store s) {
+    final q = query.trim().toLowerCase();
+    return s.menu
+        .where((m) =>
+            (cat == null || m.cat == cat) &&
+            (!vegOnly || m.veg) &&
+            (q.isEmpty || m.name.toLowerCase().contains(q) || m.code.startsWith(q)))
+        .toList();
+  }
+
+  /// Enter in the search box: add the best match (an exact item code wins),
+  /// then clear the box so the next code can be typed straight away.
+  Future<void> _addTopMatch(Store s) async {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return;
+    final found = _matches(s).where((m) => s.offReason(m) == null).toList();
+    if (found.isEmpty) {
+      toast(context, 'No item matches "$q"', error: true);
+      searchF.requestFocus();
+      return;
+    }
+    final exact = found.where((m) => m.code.toLowerCase() == q);
+    await add(exact.isNotEmpty ? exact.first : found.first);
+    if (!mounted) return;
+    setState(() {
+      query = '';
+      searchC.clear();
+    });
+    searchF.requestFocus();
+  }
+
+  Widget _layout(Store s) {
     return LayoutBuilder(builder: (c, cons) {
       final wide = cons.maxWidth >= 980;
       if (wide) {
@@ -167,13 +296,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
 
   // ---------------- menu ----------------
   Widget _menu(Store s, bool wide) {
-    final q = query.trim().toLowerCase();
-    final items = s.menu
-        .where((m) =>
-            (cat == null || m.cat == cat) &&
-            (!vegOnly || m.veg) &&
-            (q.isEmpty || m.name.toLowerCase().contains(q) || m.code.startsWith(q)))
-        .toList();
+    final items = _matches(s);
     final qtyBy = <String, int>{};
     for (final l in cart) {
       qtyBy[l.item.id] = (qtyBy[l.item.id] ?? 0) + l.qty;
@@ -185,8 +308,13 @@ class _OrderTakingState extends State<OrderTakingScreen> {
           SizedBox(
             width: 280,
             child: TextField(
+              controller: searchC,
+              focusNode: searchF,
               onChanged: (v) => setState(() => query = v),
-              decoration: const InputDecoration(hintText: 'Search items or code', prefixIcon: Icon(Icons.search, size: 20)),
+              onSubmitted: (_) => _addTopMatch(s),
+              decoration: InputDecoration(
+                  hintText: hasKeyboard ? 'Search items or code   /' : 'Search items or code',
+                  prefixIcon: const Icon(Icons.search, size: 20)),
             ),
           ),
           FilterChip(
@@ -446,8 +574,23 @@ class _OrderTakingState extends State<OrderTakingScreen> {
               Btn.outline('Clear', onTap: cart.isEmpty ? null : () => setState(cart.clear)),
               const SizedBox(width: 10),
               Expanded(
-                  child: Btn('Confirm & Print KOT', icon: Icons.print_outlined, expand: true, onTap: cart.isEmpty ? null : confirm)),
+                  child: Btn(type == OrderType.takeaway && s.printLayout.takeawayBillWithKot ? 'Print KOT + Bill' : 'Confirm & Print KOT', icon: Icons.print_outlined, expand: true, onTap: cart.isEmpty ? null : confirm)),
             ]),
+            // Optional for takeaway: collect now, or leave it for hand-over.
+            if (type == OrderType.takeaway) ...[
+              const SizedBox(height: 10),
+              Builder(builder: (_) {
+                final prior = existing?.liveLines ?? const <OrderLine>[];
+                final whole = Order(id: 0, type: type)..lines.addAll([for (final l in [...prior, ...cart]) l.copy()]);
+                return Btn(
+                  'Pay now ${inr(whole.total)} & Print KOT + Bill',
+                  icon: Icons.payments_outlined,
+                  bg: C.green,
+                  expand: true,
+                  onTap: cart.isEmpty ? null : () => confirm(payNow: true),
+                );
+              }),
+            ],
           ]),
         ),
       ]),

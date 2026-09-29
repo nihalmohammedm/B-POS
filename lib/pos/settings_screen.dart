@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'captains_screen.dart';
+import 'kot_groups_screen.dart';
+import 'print_layout_screen.dart';
 import 'printers_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -81,6 +84,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _syncPanel(s),
                       const SizedBox(height: 16),
                       _printersPanel(s),
+                      const SizedBox(height: 16),
+                      _captainsPanel(s),
+                      const SizedBox(height: 16),
+                      _kotGroupsPanel(s),
+                      const SizedBox(height: 16),
+                      _printLayoutPanel(s),
                       const SizedBox(height: 16),
                       _overviewPanel(s),
                     ]),
@@ -194,6 +203,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ]),
       );
+
+  Widget _captainsPanel(Store s) => Panel(
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Captains', style: ts(17, w: w5)),
+              const SizedBox(height: 4),
+              Text('Pair captain phones to take orders over the restaurant Wi-Fi, even without internet.',
+                  style: ts(13, c: C.muted, h: 1.4)),
+              const SizedBox(height: 12),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                Pill('${s.captainDevices.length} paired', bg: C.soft),
+                Pill('${s.connectedCaptains.length} connected',
+                    bg: s.connectedCaptains.isEmpty ? C.soft : C.greenTint, fg: s.connectedCaptains.isEmpty ? C.ink : C.greenInk),
+                if (!s.linkRunning) const Pill('Not accepting', bg: C.redTint, fg: C.redInk),
+              ]),
+            ]),
+          ),
+          Btn.outline('Manage',
+              icon: Icons.chevron_right,
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CaptainsScreen()))),
+        ]),
+      );
+
+  Widget _kotGroupsPanel(Store s) {
+    final unrouted = s.kotGroups.where((g) => !s.isRouted(g.id)).length;
+    return Panel(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('KOT groups', style: ts(17, w: w5)),
+            const SizedBox(height: 4),
+            Text('Kitchen sections from the menu, and which printer each one prints on.', style: ts(13, c: C.muted, h: 1.4)),
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              Pill('${s.kotGroups.length} groups', bg: C.soft),
+              if (unrouted > 0) Pill('$unrouted without a printer', bg: C.amberTint, fg: C.amberInk),
+            ]),
+          ]),
+        ),
+        Btn.outline('Manage',
+            icon: Icons.chevron_right,
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const KotGroupsScreen()))),
+      ]),
+    );
+  }
+
+  Widget _printLayoutPanel(Store s) {
+    final l = s.printLayout;
+    return Panel(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Print layout', style: ts(17, w: w5)),
+            const SizedBox(height: 4),
+            Text('What the invoice and KOT show, with a live preview.', style: ts(13, c: C.muted, h: 1.4)),
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              Pill('${l.paperMm} mm paper', bg: C.soft),
+              Pill('Invoice × ${l.billCopies}', bg: C.soft),
+              Pill('KOT × ${l.kotCopies}', bg: C.soft),
+            ]),
+          ]),
+        ),
+        Btn.outline('Edit',
+            icon: Icons.chevron_right,
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrintLayoutScreen()))),
+      ]),
+    );
+  }
 
   Widget _overviewPanel(Store s) => Panel(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

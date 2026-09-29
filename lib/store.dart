@@ -4,14 +4,34 @@ import 'dart:math' as math;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
+import 'package:unified_esc_pos_printer/unified_esc_pos_printer.dart' as esc;
 import 'backoffice_api.dart';
 import 'db/app_database.dart';
 import 'models.dart';
+import 'link/link_models.dart';
+import 'print_layout.dart';
 
 class Store extends ChangeNotifier {
-  Store() {
-    _loadPersisted();
+  /// [mirror]: a captain device's copy of the main POS. Its data comes from the
+  /// POS over the restaurant Wi-Fi (see lib/link), so it never syncs the menu
+  /// from the backoffice or talks to printers itself, and it keeps its own
+  /// database file ([dbName], e.g. the kitchen display's own).
+  Store({this.mirror = false, String? dbName}) : _db = AppDatabase(name: dbName ?? (mirror ? 'bpos_captain' : 'bistro_pos')) {
+    _loadPersisted().catchError((Object e) => debugPrint('Loading saved data failed: $e')).whenComplete(_markReady);
   }
+
+  final bool mirror;
+
+  final _ready = Completer<void>();
+  void _markReady() {
+    if (!_ready.isCompleted) _ready.complete();
+  }
+
+  /// Completes once saved data (menu, tables, paired captains…) is loaded from
+  /// this device, without waiting on the network. The captain link waits on it,
+  /// so a captain reconnecting while the POS is still starting up isn't told
+  /// it's unknown and sent back to pairing.
+  Future<void> get ready => _ready.future;
 
   // ---------- signed-in session (BPOS only; Captain stays unauthenticated) ----------
   String? authUserId;
@@ -75,6 +95,9 @@ class Store extends ChangeNotifier {
   Timer? _saveDebounce;
   @override
   void notifyListeners() {
+    // Async work (loading, connectivity, a captain dropping off) can finish
+    // after the store is gone; there's nobody left to tell or anything to save.
+    if (_disposed) return;
     super.notifyListeners();
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 500), _saveOperational);
@@ -86,7 +109,7 @@ class Store extends ChangeNotifier {
   // lib/db/app_database.dart), so a single changed order no longer means
   // re-serializing every order. Keeps a synced menu/printer/order setup across
   // app restarts, so re-opening the app doesn't fall back to empty state.
-  final AppDatabase _db = AppDatabase();
+  final AppDatabase _db;
 
   Future<String?> _getSetting(String key) async {
     final row = await (_db.select(_db.settingsRows)..where((t) => t.key.equals(key))).getSingleOrNull();
@@ -104,6 +127,16 @@ class Store extends ChangeNotifier {
     outletName = await _getSetting('outletName') ?? outletName;
     outletAddress = await _getSetting('outletAddress') ?? outletAddress;
     outletPhone = await _getSetting('outletPhone') ?? outletPhone;
+    await _loadKotConfig();
+    await _loadCaptains();
+    final layoutStr = await _getSetting('printLayout');
+    if (layoutStr != null) {
+      try {
+        printLayout = PrintLayout.fromJson(jsonDecode(layoutStr) as Map<String, dynamic>);
+      } catch (_) {
+        // Corrupt value: keep the defaults rather than failing startup.
+      }
+    }
 
     final menuRows = await _db.select(_db.menuItemRows).get();
     final catRows = await (_db.select(_db.categoryRows)
@@ -134,6 +167,7 @@ class Store extends ChangeNotifier {
 
     final kotRows = await _db.select(_db.kotRows).get();
     kots.addAll(kotRows.map((r) => Kot.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+    _relinkKotLines();
 
     final historyRows = await _db.select(_db.historyRows).get();
     history.addAll(historyRows.map((r) => Order.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
@@ -153,9 +187,11 @@ class Store extends ChangeNotifier {
     _billSeq = int.tryParse(await _getSetting('billSeq') ?? '') ?? _billSeq;
     _taSeq = int.tryParse(await _getSetting('taSeq') ?? '') ?? _taSeq;
     notifyListeners();
+    _markReady();
 
     // First-ever launch (nothing cached yet): pull the real menu straight away instead
     // of sitting empty until someone finds Settings.
+    if (mirror) return;
     if (!hasMenuCache) {
       try {
         await syncMenu();
@@ -165,6 +201,7 @@ class Store extends ChangeNotifier {
     }
 
     _wireBackgroundSync();
+    checkPrinters();
   }
 
   Future<void> _saveMenu() async {
@@ -260,6 +297,8 @@ class Store extends ChangeNotifier {
     isOnline = result.any((r) => r != ConnectivityResult.none);
     notifyListeners();
     if (triggerSync && isOnline && !wasOnline) _backgroundSync();
+    // LAN printers sit on the same network: re-check them when it comes back.
+    if (triggerSync && isOnline && !wasOnline) checkPrinters();
   }
 
   Future<void> _backgroundSync() async {
@@ -271,24 +310,385 @@ class Store extends ChangeNotifier {
     }
   }
 
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
     _connectivitySub?.cancel();
     _periodicSyncTimer?.cancel();
     _saveDebounce?.cancel();
+    _notices.close();
+    _revoked.close();
     super.dispose();
+  }
+
+  // ---------- print layout ----------
+  PrintLayout printLayout = PrintLayout();
+
+  void setPrintLayout(PrintLayout l) {
+    printLayout = l.copy();
+    notifyListeners();
+    _setSetting('printLayout', jsonEncode(printLayout.toJson()));
+  }
+
+  // ---------- captain link (main POS side) ----------
+  // Captain devices pair with this POS and talk to it over the restaurant Wi-Fi
+  // (lib/link/pos_host.dart). Only hashes of pairing and session tokens are kept.
+
+  final List<CaptainDevice> captainDevices = [];
+  PairingOffer? pairing;
+
+  /// Stable id of this POS, created on first run. Captains remember it so they
+  /// can find this POS again on the Wi-Fi after its IP address changes.
+  String posId = '';
+
+  /// Captain device ids with a live connection right now.
+  final Set<String> connectedCaptains = {};
+
+  /// Whether this POS is accepting captains, and why not if it isn't.
+  bool linkRunning = false;
+  String? linkError;
+  List<String> linkAddresses = const [];
+
+  void setLinkState({required bool running, String? error, List<String>? addresses}) {
+    linkRunning = running;
+    linkError = error;
+    if (addresses != null) linkAddresses = addresses;
+    notifyListeners();
+  }
+
+  PairingOffer startPairing() {
+    pairing = PairingOffer(newToken(), newPairCode(), DateTime.now().add(pairingTtl));
+    notifyListeners();
+    return pairing!;
+  }
+
+  void cancelPairing() {
+    pairing = null;
+    notifyListeners();
+  }
+
+  /// Checks a QR token or typed code against the open offer. One use only;
+  /// five wrong tries void the offer.
+  bool consumePairing(String secret) {
+    final p = pairing;
+    if (p == null || p.expired) return false;
+    final h = hashToken(secret), hc = hashToken(normalizeCode(secret));
+    if (h == p.tokenHash || hc == p.codeHash) {
+      pairing = null;
+      notifyListeners();
+      return true;
+    }
+    p.failures++;
+    return false;
+  }
+
+  /// Registers a newly paired device; returns it with the raw session token,
+  /// which is handed to the device once and never stored here.
+  (CaptainDevice, String) registerCaptain(String name, String deviceInfo, {String kind = deviceCaptain}) {
+    final session = newToken();
+    final d = CaptainDevice(
+        id: newToken(9),
+        name: name,
+        deviceInfo: deviceInfo,
+        kind: kind,
+        sessionHash: hashToken(session),
+        pairedAt: DateTime.now());
+    captainDevices.add(d);
+    notifyListeners();
+    _saveCaptains();
+    return (d, session);
+  }
+
+  CaptainDevice? captainBySession(String session) {
+    final h = hashToken(session);
+    for (final d in captainDevices) {
+      if (d.sessionHash == h) return d;
+    }
+    return null;
+  }
+
+  void captainSeen(CaptainDevice d, {required bool connected}) {
+    d.lastSeenAt = DateTime.now();
+    connected ? connectedCaptains.add(d.id) : connectedCaptains.remove(d.id);
+    notifyListeners();
+    _saveCaptains();
+  }
+
+  final _revoked = StreamController<String>.broadcast();
+
+  /// Device ids removed from this POS; the link host disconnects them.
+  Stream<String> get revokedCaptains => _revoked.stream;
+
+  void removeCaptain(String id) {
+    captainDevices.removeWhere((d) => d.id == id);
+    connectedCaptains.remove(id);
+    _revoked.add(id);
+    notifyListeners();
+    _saveCaptains();
+  }
+
+  Future<void> _saveCaptains() =>
+      _setSetting('captainDevices', jsonEncode(captainDevices.map((d) => d.toJson()).toList()));
+
+  Future<void> _loadCaptains() async {
+    posId = await _getSetting('posId') ?? '';
+    if (posId.isEmpty) {
+      posId = newToken(9);
+      await _setSetting('posId', posId);
+    }
+    try {
+      final v = await _getSetting('captainDevices');
+      if (v != null) {
+        captainDevices
+          ..clear()
+          ..addAll((jsonDecode(v) as List).map((e) => CaptainDevice.fromJson(e as Map<String, dynamic>)));
+      }
+    } catch (_) {
+      // Corrupt value: captains re-pair.
+    }
+  }
+
+  // ---------- bill requests & notices ----------
+
+  final List<BillRequest> billRequests = [];
+
+  /// A captain asks the counter for a bill. One open request per order.
+  BillRequest requestBill(Order o, String captain) {
+    for (final r in billRequests) {
+      if (r.orderId == o.id) return r;
+    }
+    final r = BillRequest(id: newToken(6), orderId: o.id, label: titleOf(o), captain: captain, at: DateTime.now());
+    billRequests.add(r);
+    notifyListeners();
+    return r;
+  }
+
+  void dismissBillRequest(String id) {
+    billRequests.removeWhere((r) => r.id == id);
+    notifyListeners();
+  }
+
+  /// KOTs a kitchen display marked served, for the counter; newest last.
+  final List<ServedNotice> servedNotices = [];
+
+  /// A kitchen display bumped [k]: tell the counter. One notice per KOT, so a
+  /// recall and re-bump doesn't stack a second one.
+  void kitchenServed(Kot k, String station) {
+    final o = orderById(k.orderId);
+    if (o == null) return;
+    servedNotices.removeWhere((n) => n.kotNo == k.no);
+    final items = [
+      for (final l in k.lines)
+        if (l.activeQty > 0) '${l.activeQty}× ${l.item.name}'
+    ].join(', ');
+    servedNotices.add(ServedNotice(
+        id: newToken(6),
+        orderId: o.id,
+        kotNo: k.no,
+        label: titleOf(o),
+        station: station,
+        items: items,
+        handedOver: o.type != OrderType.dineIn,
+        at: DateTime.now()));
+    notifyListeners();
+  }
+
+  void dismissServed(String id) {
+    servedNotices.removeWhere((n) => n.id == id);
+    notifyListeners();
+  }
+
+  void dismissAllServed() {
+    servedNotices.clear();
+    notifyListeners();
+  }
+
+  final _notices = StreamController<(String, bool)>.broadcast();
+
+  /// Messages for the POS screen from work done in the background (a captain's
+  /// KOT printed or failed): (text, isError). The POS shell shows them as toasts.
+  Stream<(String, bool)> get notices => _notices.stream;
+  void notice(String msg, {bool error = false}) => _notices.add((msg, error));
+
+  // ---------- snapshot: what captains see ----------
+
+  /// Everything a captain needs, sent by the POS on connect and after changes.
+  /// All active orders go to every captain: assignment isn't a visibility filter.
+  Map<String, dynamic> linkSnapshot() => {
+        'outlet': {'name': outletName, 'address': outletAddress, 'phone': outletPhone},
+        'categories': categories,
+        'menu': menu.map((m) => m.toJson()).toList(),
+        'itemOff': itemOff.toList(),
+        'catOff': catOff.toList(),
+        'stock': stock,
+        'tables': tables.map((t) => t.toJson()).toList(),
+        'orders': orders.map((o) => o.toJson()).toList(),
+        'kotGroups': kotGroups.map((g) => g.toJson()).toList(),
+        'printLayout': printLayout.toJson(),
+        'nextKot': _kotSeq + 1,
+        'nextTa': _taSeq + 1,
+        'billRequests': billRequests.map((r) => r.orderId).toList(),
+        'kots': kitchenKots.map((k) => k.toJson()).toList(),
+      };
+
+  /// How long a cancellation KOT stays on kitchen displays: it has nothing
+  /// left to cook, so it never goes "active", but the cook has to see it.
+  static const cancelShowFor = Duration(minutes: 20);
+
+  /// KOTs a kitchen display needs: every ticket still being worked on, plus
+  /// recent cancellations/changes. Finished tickets stay off the wire.
+  List<Kot> get kitchenKots {
+    final now = DateTime.now();
+    return kots
+        .where((k) =>
+            orderById(k.orderId) != null &&
+            (k.stage != KotStage.done || (k.kind != KotKind.order && now.difference(k.at) < cancelShowFor)))
+        .toList();
+  }
+
+  /// Order ids a captain has asked the bill for (mirror side).
+  Set<int> requestedBills = {};
+
+  /// Captain side: replace the local copy with the POS's.
+  void applyLinkSnapshot(Map<String, dynamic> j) {
+    final o = j['outlet'] as Map<String, dynamic>? ?? const {};
+    outletName = o['name'] as String? ?? '';
+    outletAddress = o['address'] as String? ?? '';
+    outletPhone = o['phone'] as String? ?? '';
+    categories = (j['categories'] as List? ?? []).cast<String>();
+    menu
+      ..clear()
+      ..addAll((j['menu'] as List? ?? []).map((e) => MenuItem.fromJson(e as Map<String, dynamic>)));
+    itemOff
+      ..clear()
+      ..addAll((j['itemOff'] as List? ?? []).cast<String>());
+    catOff
+      ..clear()
+      ..addAll((j['catOff'] as List? ?? []).cast<String>());
+    stock
+      ..clear()
+      ..addAll((j['stock'] as Map? ?? {}).map((k, v) => MapEntry(k as String, (v as num).toInt())));
+    tables
+      ..clear()
+      ..addAll((j['tables'] as List? ?? []).map((e) => TableModel.fromJson(e as Map<String, dynamic>)));
+    orders
+      ..clear()
+      ..addAll((j['orders'] as List? ?? []).map((e) => Order.fromJson(e as Map<String, dynamic>)));
+    kotGroups = (j['kotGroups'] as List? ?? []).map((e) => KotGroup.fromJson(e as Map<String, dynamic>)).toList();
+    if (j['printLayout'] is Map<String, dynamic>) printLayout = PrintLayout.fromJson(j['printLayout'] as Map<String, dynamic>);
+    _kotSeq = ((j['nextKot'] as num?) ?? 1).toInt() - 1;
+    _taSeq = ((j['nextTa'] as num?) ?? 1).toInt() - 1;
+    requestedBills = {...(j['billRequests'] as List? ?? []).map((e) => (e as num).toInt())};
+    kots
+      ..clear()
+      ..addAll((j['kots'] as List? ?? []).map((e) => Kot.fromJson(e as Map<String, dynamic>)));
+    lastMenuSync = DateTime.now();
+    notifyListeners();
+    _saveMenu();
+    _saveKotConfig();
+  }
+
+  // ---------- KOT groups & routing ----------
+  // Groups and which item goes to which group come from the backoffice menu.
+  // Which printer each group prints on is set on this device (printers are
+  // local hardware). One printer per group; one printer can take several groups.
+
+  List<KotGroup> kotGroups = [];
+
+  /// Group id → printer ids. Key [noGroupKey] routes items with no group.
+  final Map<String, Set<String>> kotRoutes = {};
+  static const noGroupKey = '';
+
+  KotGroup? kotGroup(String? id) {
+    for (final g in kotGroups) {
+      if (g.id == id) return g;
+    }
+    return null;
+  }
+
+  /// Printers that get a KOT for [groupId]. A group with nothing picked falls
+  /// back to the counter (bill) printer, or to every "Print KOTs" printer when
+  /// there is none, so a ticket is never silently dropped.
+  List<PosPrinter> kotPrintersFor(String? groupId) {
+    final picked = kotRoutes[groupId ?? noGroupKey] ?? const {};
+    final routed = printers.where((p) => picked.contains(p.id)).toList();
+    return routed.isNotEmpty ? routed : kotFallbackPrinters;
+  }
+
+  /// Where KOTs for a group with no printer picked go: the counter printer
+  /// (first "Print bills" printer, same one bills use), else every KOT printer.
+  List<PosPrinter> get kotFallbackPrinters {
+    final counter = billPrinters.take(1).toList();
+    return counter.isNotEmpty ? counter : kotPrinters;
+  }
+
+  bool isRouted(String? groupId) => printers.any((p) => (kotRoutes[groupId ?? noGroupKey] ?? const {}).contains(p.id));
+
+  /// Each group prints on one printer: picking a printer replaces the group's
+  /// current one, and un-picking it leaves the group unassigned.
+  void setKotRoute(String? groupId, String printerId, bool on) {
+    final s = kotRoutes.putIfAbsent(groupId ?? noGroupKey, () => {});
+    if (on) {
+      s
+        ..clear()
+        ..add(printerId);
+    } else {
+      s.remove(printerId);
+    }
+    notifyListeners();
+    _saveKotConfig();
+  }
+
+  int itemsInGroup(String? groupId) => menu.where((m) {
+        if (m.variants.any((v) => v.kotGroup != null)) {
+          return m.variants.any((v) => (v.kotGroup ?? m.kotGroup) == groupId);
+        }
+        return m.kotGroup == groupId;
+      }).length;
+
+  Future<void> _saveKotConfig() async {
+    await _setSetting('kotGroups', jsonEncode(kotGroups.map((g) => g.toJson()).toList()));
+    await _setSetting('kotRoutes', jsonEncode({for (final e in kotRoutes.entries) e.key: e.value.toList()}));
+  }
+
+  Future<void> _loadKotConfig() async {
+    try {
+      final g = await _getSetting('kotGroups');
+      if (g != null) kotGroups = (jsonDecode(g) as List).map((e) => KotGroup.fromJson(e as Map<String, dynamic>)).toList();
+      final r = await _getSetting('kotRoutes');
+      if (r != null) {
+        kotRoutes
+          ..clear()
+          // Routes saved when a group could take several printers keep only the first.
+          ..addAll((jsonDecode(r) as Map<String, dynamic>).map((k, v) => MapEntry(k, {...(v as List).cast<String>().take(1)})));
+      }
+    } catch (_) {
+      // Corrupt value: start unrouted (everything falls back to the counter printer).
+    }
   }
 
   // ---------- printers ----------
   List<PosPrinter> get billPrinters => printers.where((p) => p.forBill).toList();
   List<PosPrinter> get kotPrinters => printers.where((p) => p.forKot).toList();
 
-  String nextPrinterId() => 'pr${++_printerSeq}';
+  /// A printer id not used by any saved printer. The counter isn't persisted, so
+  /// it's bumped past the loaded ids — reusing one would make [_savePrinters]
+  /// fail on the duplicate key and silently drop the new printer.
+  String nextPrinterId() {
+    for (final p in printers) {
+      final n = p.id.startsWith('pr') ? int.tryParse(p.id.substring(2)) : null;
+      if (n != null && n > _printerSeq) _printerSeq = n;
+    }
+    return 'pr${++_printerSeq}';
+  }
 
   void addPrinter(PosPrinter p) {
     printers.add(p);
     notifyListeners();
     _savePrinters();
+    checkPrinters(only: p);
   }
 
   void updatePrinter(PosPrinter p) {
@@ -296,23 +696,148 @@ class Store extends ChangeNotifier {
     if (i != -1) printers[i] = p;
     notifyListeners();
     _savePrinters();
+    checkPrinters(only: p);
   }
 
   void removePrinter(String id) {
+    _printerStatus.remove(id);
     printers.removeWhere((p) => p.id == id);
+    for (final s in kotRoutes.values) {
+      s.remove(id);
+    }
+    _saveKotConfig();
     notifyListeners();
     _savePrinters();
   }
 
-  /// Sends a short test ticket to [p]. Stands in for real ESC/POS I/O over
-  /// USB / Bluetooth SPP / a raw LAN socket — the transport [p.conn] picks between.
-  Future<bool> testPrint(PosPrinter p) async {
-    await Future.delayed(const Duration(milliseconds: 900));
+  /// Candidate devices for [p], in the order to try them. A saved Bluetooth address
+  /// doesn't record whether it came from a Classic or BLE scan, so both are tried.
+  List<esc.PrinterDevice> _devicesFor(PosPrinter p) {
+    switch (p.conn) {
+      case PrinterConn.lan:
+        final ip = p.ip?.trim() ?? '';
+        if (ip.isEmpty) throw 'No IP address set';
+        return [esc.NetworkPrinterDevice(name: p.name, host: ip, port: p.port)];
+      case PrinterConn.bluetooth:
+        final addr = p.btAddress?.trim() ?? '';
+        if (addr.isEmpty) throw 'No Bluetooth device selected';
+        return [
+          esc.BluetoothPrinterDevice(name: p.name, address: addr),
+          esc.BlePrinterDevice(name: p.name, deviceId: addr),
+        ];
+      case PrinterConn.usb:
+        final id = p.usbIdentifier?.trim() ?? '';
+        if (id.isEmpty) throw 'No USB device selected';
+        return [
+          esc.UsbPrinterDevice(
+            name: p.name,
+            identifier: id,
+            usbPlatform: defaultTargetPlatform == TargetPlatform.android ? esc.UsbPlatform.android : esc.UsbPlatform.desktop,
+          ),
+        ];
+    }
+  }
+
+  /// Sends raw ESC/POS [bytes] to [p] over its configured transport.
+  /// Returns null on success, otherwise a human-readable error. The outcome
+  /// also updates [statusOf], so a real print keeps the status indicator honest.
+  Future<String?> sendToPrinter(PosPrinter p, List<int> bytes) async {
+    final err = await _withPrinter(p, bytes, timeout: const Duration(seconds: 8));
+    if (err != null) debugPrint('Print to ${p.name} failed: $err');
+    _setStatus(p, err);
+    return err;
+  }
+
+  /// Connects to [p], sends [bytes] if given (a check just connects), and
+  /// disconnects. Tries each candidate device in turn; null means it worked.
+  Future<String?> _withPrinter(PosPrinter p, List<int>? bytes, {required Duration timeout}) async {
+    Object? lastErr;
+    try {
+      for (final d in _devicesFor(p)) {
+        final m = esc.PrinterManager();
+        try {
+          await m.connect(d, timeout: timeout);
+          if (bytes != null) await m.printBytes(bytes);
+          await m.disconnect();
+          return null;
+        } catch (e) {
+          lastErr = e;
+          try {
+            await m.disconnect();
+          } catch (_) {}
+        } finally {
+          await m.dispose();
+        }
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+    return '${lastErr ?? 'Could not connect'}';
+  }
+
+  // ---------- printer status ----------
+  // Checked at startup, when the network comes back, and after a printer is
+  // added or edited; every real print updates it too. Not persisted: a status
+  // from before a restart says nothing about now.
+
+  final Map<String, PrinterStatus> _printerStatus = {};
+  bool checkingPrinters = false;
+
+  PrinterStatus statusOf(PosPrinter p) => _printerStatus[p.id] ?? const PrinterStatus(PrinterHealth.unknown);
+  List<PosPrinter> get offlinePrinters => printers.where((p) => statusOf(p).health == PrinterHealth.offline).toList();
+
+  void _setStatus(PosPrinter p, String? err) {
+    _printerStatus[p.id] =
+        PrinterStatus(err == null ? PrinterHealth.online : PrinterHealth.offline, error: err, at: DateTime.now());
+    notifyListeners();
+  }
+
+  /// Connects to each printer (or just [only]) without printing anything.
+  Future<void> checkPrinters({PosPrinter? only}) async {
+    final targets = only != null ? [only] : [...printers];
+    if (targets.isEmpty || (only == null && checkingPrinters)) return;
+    if (only == null) checkingPrinters = true;
+    for (final p in targets) {
+      _printerStatus[p.id] = PrinterStatus(PrinterHealth.checking, error: _printerStatus[p.id]?.error);
+    }
+    notifyListeners();
+    await Future.wait(targets.map((p) async {
+      // Scanning doesn't mean reachable, and a check must not stall the POS: keep it short.
+      final err = await _withPrinter(p, null, timeout: const Duration(seconds: 5));
+      if (printers.any((x) => x.id == p.id)) _setStatus(p, err);
+    }));
+    if (only == null) checkingPrinters = false;
+    notifyListeners();
+  }
+
+
+  /// Sends a short ESC/POS test ticket to [p] over its configured transport.
+  /// Returns null on success, otherwise a human-readable error.
+  Future<String?> testPrint(PosPrinter p) async {
+    String? error;
+    try {
+      final t = await esc.Ticket.create(esc.PaperSize.mm58);
+      t.text('TEST PRINT',
+          align: esc.PrintAlign.center,
+          style: const esc.PrintTextStyle(bold: true, height: esc.TextSize.size2, width: esc.TextSize.size2));
+      t.text(p.name, align: esc.PrintAlign.center);
+      t.text('-' * 32);
+      t.text('Connection: ${p.conn.label}');
+      t.text('Address: ${p.connSummary}');
+      t.text('Roles: ${[if (p.forBill) 'Bill', if (p.forKot) 'KOT'].join(', ')}');
+      t.text('Time: ${DateTime.now().toString().substring(0, 19)}');
+      t.text('-' * 32);
+      t.text('Printer OK', align: esc.PrintAlign.center, style: const esc.PrintTextStyle(bold: true));
+      t.cut(linesBefore: 3);
+      error = await sendToPrinter(p, t.bytes);
+    } catch (e) {
+      error = '$e';
+    }
     p.lastTestAt = DateTime.now();
-    p.lastTestOk = true;
+    p.lastTestOk = error == null;
     notifyListeners();
     _savePrinters();
-    return true;
+    return error;
   }
 
   // ---------- backoffice sync ----------
@@ -365,6 +890,7 @@ class Store extends ChangeNotifier {
       final removed = menu.where((m) => !seenIds.contains(m.id)).length;
       menu.removeWhere((m) => !seenIds.contains(m.id));
       if (result.categories.isNotEmpty) categories = result.categories;
+      kotGroups = result.kotGroups;
       if (result.outlet.name.isNotEmpty) outletName = result.outlet.name;
       outletAddress = result.outlet.address;
       outletPhone = result.outlet.phone;
@@ -390,6 +916,7 @@ class Store extends ChangeNotifier {
       lastMenuSync = r.at;
       lastSyncResult = r;
       await _saveMenu();
+      await _saveKotConfig();
       await _saveTables();
       return r;
     } catch (e) {
@@ -472,8 +999,13 @@ class Store extends ChangeNotifier {
 
   bool freeParty(TableModel t, Party p) {
     final o = orderOfParty(t, p);
-    if (o != null && o.lines.isNotEmpty) return false;
-    if (o != null) orders.remove(o);
+    if (o != null && o.liveLines.isNotEmpty) return false;
+    if (o != null) {
+      orders.remove(o);
+      kots.removeWhere((k) => k.orderId == o.id);
+      // Every item was cancelled: keep the order and its cancellations for audit.
+      if (o.lines.isNotEmpty) history.add(o..voided = true);
+    }
     t.parties.remove(p);
     notifyListeners();
     return true;
@@ -513,19 +1045,21 @@ class Store extends ChangeNotifier {
       o.type == OrderType.dineIn ? 'Table ${labelOf(o)}' : (o.customer.isEmpty ? 'Walk-in' : o.customer);
 
   OrderStage stageOf(Order o) {
-    if (o.billed) return OrderStage.billing;
+    // Takeaway/delivery bills print with the order, so they keep following the kitchen.
+    if (o.billed && !o.isPaid && o.type == OrderType.dineIn) return OrderStage.billing;
     if (o.dispatched) return OrderStage.outForDelivery;
-    if (o.lines.isEmpty) return OrderStage.placed;
-    if (o.lines.every((l) => l.state == LineState.served)) {
+    final live = o.liveLines;
+    if (live.isEmpty) return OrderStage.placed;
+    if (live.every((l) => l.state == LineState.served)) {
       return o.type == OrderType.dineIn ? OrderStage.served : OrderStage.ready;
     }
-    if (o.lines.every((l) => l.state.index >= LineState.ready.index)) return OrderStage.ready;
+    if (live.every((l) => l.state.index >= LineState.ready.index)) return OrderStage.ready;
     return OrderStage.preparing;
   }
 
   List<Order> get activeOrders => orders.where((o) => o.lines.isNotEmpty).toList()..sort((a, b) => a.at.compareTo(b.at));
 
-  Kot sendKot(Order o, List<OrderLine> lines) {
+  List<Kot> sendKot(Order o, List<OrderLine> lines) {
     if (!orders.contains(o)) {
       o.id = ++_orderSeq;
       if (o.type == OrderType.takeaway) {
@@ -535,19 +1069,52 @@ class Store extends ChangeNotifier {
       }
       orders.add(o);
     }
-    final k = Kot(++_kotSeq, o.id, DateTime.now(), []);
-    for (final l in lines) {
-      final c = l.copy()
-        ..state = LineState.queued
-        ..kotNo = k.no;
-      k.lines.add(c);
-      o.lines.add(c);
-      final s = stock[l.item.id];
-      if (s != null) stock[l.item.id] = math.max(0, s - l.qty);
+    // One order can need several kitchen sections: one KOT (and number) per KOT group.
+    final at = DateTime.now();
+    final out = <Kot>[];
+    for (final g in _byGroup(lines, (l) => l.kotGroup)) {
+      final k = Kot(++_kotSeq, o.id, at, [], group: g.$1);
+      for (final l in g.$2) {
+        final c = l.copy()
+          ..state = LineState.queued
+          ..kotNo = k.no;
+        k.lines.add(c);
+        o.lines.add(c);
+        final s = stock[l.item.id];
+        if (s != null) stock[l.item.id] = math.max(0, s - l.qty);
+      }
+      kots.add(k);
+      out.add(k);
     }
-    kots.add(k);
+    _linkBatch(out);
     notifyListeners();
-    return k;
+    return out;
+  }
+
+  /// Tells each KOT sent together about the others ("KOT 1 of 3").
+  void _linkBatch(List<Kot> out) {
+    final nos = [for (final k in out) k.no];
+    for (final k in out) {
+      k.batch
+        ..clear()
+        ..addAll(nos);
+    }
+  }
+
+  /// Splits [xs] by KOT group, in the backoffice's group order; items with no
+  /// group (or a group no longer on the menu) come last.
+  List<(String?, List<T>)> _byGroup<T>(Iterable<T> xs, String? Function(T) groupOf) {
+    final m = <String?, List<T>>{};
+    for (final x in xs) {
+      m.putIfAbsent(groupOf(x), () => []).add(x);
+    }
+    int rank(String? g) {
+      final i = kotGroups.indexWhere((x) => x.id == g);
+      return i == -1 ? kotGroups.length : i;
+    }
+
+    final keys = m.keys.toList()..sort((a, b) => rank(a).compareTo(rank(b)));
+    return [for (final k in keys) (k, m[k]!)];
   }
 
   Kot? lastKot(Order o) {
@@ -560,8 +1127,14 @@ class Store extends ChangeNotifier {
 
   String assignBillNo(Order o) => o.billNo ??= 'B${++_billSeq}';
 
+  /// Bills printed and waiting for payment, longest-waiting first.
+  List<Order> get awaitingPayment => orders.where((o) => o.billed && !o.isPaid).toList()
+    ..sort((a, b) => (a.billedAt ?? a.at).compareTo(b.billedAt ?? b.at));
+
   String printBill(Order o) {
     o.billed = true;
+    billRequests.removeWhere((r) => r.orderId == o.id); // asked for, now done
+    o.billedAt = DateTime.now();
     final no = assignBillNo(o);
     notifyListeners();
     return no;
@@ -571,6 +1144,7 @@ class Store extends ChangeNotifier {
     final v = o.billNo;
     o.billed = false;
     o.billNo = null;
+    o.billedAt = null;
     notifyListeners();
     return v;
   }
@@ -597,7 +1171,23 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Takes payment before the food is ready (takeaway "Pay now"). The paid
+  /// invoice counts as the bill, so the order is locked like a billed one; it
+  /// stays open until it's handed over ([settle] with no further payments).
+  String prepay(Order o, List<Payment> pays) {
+    billRequests.removeWhere((r) => r.orderId == o.id);
+    o.payments.addAll(pays);
+    o.payNote = 'Paid · ${{for (final p in pays) p.method}.join(' + ')}';
+    o.billed = true;
+    o.billedAt = DateTime.now();
+    final no = assignBillNo(o);
+    notifyListeners();
+    return no;
+  }
+
   void settle(Order o, {List<Payment> payments = const []}) {
+    billRequests.removeWhere((r) => r.orderId == o.id);
+    servedNotices.removeWhere((n) => n.orderId == o.id); // order closed: nothing left to act on
     assignBillNo(o);
     o.payments.addAll(payments);
     orders.remove(o);
@@ -607,18 +1197,123 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool canCancel(Order o) => !o.billed && o.lines.every((l) => l.state == LineState.queued);
+  // ---------- cancel / edit sent items ----------
+  // Every change to an item the kitchen already has produces a KOT to print:
+  // a cancellation KOT for removed units, a modified KOT when an item is swapped
+  // for a different size/add-ons/note, or a normal KOT for extra units.
 
-  bool cancel(Order o) {
-    if (!canCancel(o)) return false;
+  List<String> cancelReasons = [...defaultCancelReasons];
+
+  /// Items can't change once the bill is printed; reopen it first.
+  bool canAmend(Order o) => !o.billed && orders.contains(o);
+
+  bool canCancel(Order o) => !o.billed;
+
+  /// Cancels [qty] units of sent line [l]. Returns the cancellation KOT to print.
+  List<Kot> cancelItem(Order o, OrderLine l, int qty, String reason, {String by = ''}) =>
+      _amend(o, [(l, qty)], null, reason, by);
+
+  /// Changes sent line [l] to [updated]. Fewer units of the same item is a
+  /// cancellation, more units is a normal KOT for the extra, anything else
+  /// (size, add-ons, note) cancels the old line and sends the new one: one
+  /// modified KOT when both are in the same KOT group, otherwise a cancellation
+  /// KOT to the old group and a normal KOT to the new one. Returns the KOTs to
+  /// print (empty if nothing changed).
+  List<Kot> editItem(Order o, OrderLine l, OrderLine updated, String reason, {String by = ''}) {
+    if (updated.qty <= 0) return cancelItem(o, l, l.activeQty, reason, by: by);
+    if (l.sameConfig(updated)) {
+      final extra = updated.qty - l.activeQty;
+      if (extra == 0) return const [];
+      if (extra < 0) return cancelItem(o, l, -extra, reason, by: by);
+      return sendKot(o, [
+        updated.copy()
+          ..qty = extra
+          ..cancelledQty = 0
+      ]);
+    }
+    return _amend(o, [(l, l.activeQty)], updated, reason, by);
+  }
+
+  /// Cancels everything left on [o], one cancellation KOT per KOT group, or
+  /// nothing if nothing was left. The order stays open until [closeVoidedOrder],
+  /// so the KOTs can still be rendered with the table label.
+  List<Kot> cancelAllItems(Order o, String reason, {String by = ''}) =>
+      _amend(o, [for (final l in o.liveLines) (l, l.activeQty)], null, reason, by);
+
+  /// Archives an order whose items are all cancelled (history keeps the audit trail).
+  void closeVoidedOrder(Order o) {
     orders.remove(o);
     kots.removeWhere((k) => k.orderId == o.id);
     if (o.type == OrderType.dineIn) table(o.tableId!).parties.removeWhere((p) => p.orderId == o.id);
+    if (o.lines.isNotEmpty) history.add(o..voided = true);
     notifyListeners();
-    return true;
+  }
+
+  List<Kot> _amend(Order o, List<(OrderLine, int)> cancel, OrderLine? replacement, String reason, String by) {
+    final at = DateTime.now();
+    final cuts = [
+      for (final (l, qty) in cancel)
+        if (math.min(qty, l.activeQty) > 0) (l, math.min(qty, l.activeQty))
+    ];
+    // Each kitchen section hears only about its own items.
+    final groups = <String?>{
+      ...[for (final (l, _) in cuts) l.kotGroup],
+      if (replacement != null) replacement.kotGroup,
+    };
+    final out = <Kot>[];
+    for (final g in _byGroup(groups, (x) => x)) {
+      final k = Kot(++_kotSeq, o.id, at, [], reason: reason, by: by, group: g.$1);
+      for (final (l, n) in cuts.where((c) => c.$1.kotGroup == g.$1)) {
+        l.cancelledQty += n;
+        k.voided.add(l.copy()
+          ..qty = n
+          ..cancelledQty = 0);
+        o.cancellations.add(ItemCancellation(
+            itemName: l.item.name, optText: l.optText, qty: n, unitPrice: l.unit, reason: reason, by: by, kotNo: k.no, at: at));
+        // Nothing cooked yet, so tracked portions go back into stock.
+        final st = stock[l.item.id];
+        if (st != null && l.state == LineState.queued) stock[l.item.id] = st + n;
+      }
+      if (replacement != null && replacement.kotGroup == g.$1) {
+        final c = replacement.copy()
+          ..state = LineState.queued
+          ..kotNo = k.no
+          ..cancelledQty = 0;
+        k.lines.add(c);
+        o.lines.add(c);
+        final st = stock[c.item.id];
+        if (st != null) stock[c.item.id] = math.max(0, st - c.qty);
+      }
+      kots.add(k);
+      out.add(k);
+    }
+    _linkBatch(out);
+    notifyListeners();
+    return out;
   }
 
   // ---------- kitchen ----------
+
+  /// A KOT's lines are the same objects as its order's lines while the app
+  /// runs, so kitchen progress shows on the order. Saved separately, they load
+  /// as copies: point each KOT back at its order's lines (same kotNo, same
+  /// order they were added in).
+  void _relinkKotLines() {
+    for (final k in kots) {
+      final o = orderById(k.orderId);
+      if (o == null || k.lines.isEmpty) continue;
+      final own = o.lines.where((l) => l.kotNo == k.no).toList();
+      if (own.length == k.lines.length) k.lines.setAll(0, own);
+    }
+  }
+
+  Kot? kotByNo(int no) {
+    for (final k in kots) {
+      if (k.no == no) return k;
+    }
+    return null;
+  }
+
   List<Kot> get activeKots =>
       kots.where((k) => orderById(k.orderId) != null && k.stage != KotStage.done).toList()..sort((a, b) => a.at.compareTo(b.at));
 

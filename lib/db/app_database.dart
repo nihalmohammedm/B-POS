@@ -110,7 +110,9 @@ class SettingsRows extends Table {
   SettingsRows,
 ])
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(conn.openConnection());
+  /// [name] picks the database file: the POS and a captain mirror on the same
+  /// computer must not share one.
+  AppDatabase({String name = 'bistro_pos'}) : super(conn.openConnection(name: name));
   AppDatabase.forTesting(super.executor);
 
   @override

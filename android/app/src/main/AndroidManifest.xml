@@ -18,10 +18,17 @@
     <!-- unified_esc_pos_printer: USB OTG printer discovery -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
 
+    <!-- Captain link: captains talk to the main POS over the restaurant Wi-Fi
+         (plain ws:// on the LAN, hence usesCleartextTraffic below; the backoffice
+         stays on https). The camera scans the pairing QR. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

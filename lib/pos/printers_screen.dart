@@ -1,9 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:unified_esc_pos_printer/unified_esc_pos_printer.dart' as esc;
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/printer_status.dart';
 
 IconData _connIcon(PrinterConn c) => switch (c) {
       PrinterConn.usb => Icons.usb,
@@ -62,9 +64,9 @@ class PrintersScreen extends StatefulWidget {
 class _PrintersScreenState extends State<PrintersScreen> {
   Future<void> _testPrint(Store s, PosPrinter p) async {
     toast(context, 'Sending test ticket to ${p.name}…');
-    final ok = await s.testPrint(p);
+    final err = await s.testPrint(p);
     if (!mounted) return;
-    toast(context, ok ? 'Test ticket sent to ${p.name}' : 'Could not reach ${p.name}', error: !ok);
+    toast(context, err == null ? 'Test ticket sent to ${p.name}' : 'Could not print to ${p.name}: $err', error: err != null);
   }
 
   Future<void> _delete(Store s, PosPrinter p) async {
@@ -85,6 +87,11 @@ class _PrintersScreenState extends State<PrintersScreen> {
               RoundIcon(Icons.arrow_back, onTap: () => Navigator.of(context).maybePop(), tooltip: 'Back'),
               const SizedBox(width: 14),
               Expanded(child: Text('Printers', style: ts(22, w: w5))),
+              if (s.printers.isNotEmpty) ...[
+                Btn.outline(s.checkingPrinters ? 'Checking…' : 'Check all',
+                    icon: s.checkingPrinters ? null : Icons.refresh, onTap: s.checkingPrinters ? null : () => s.checkPrinters()),
+                const SizedBox(width: 10),
+              ],
               Btn('Add printer', icon: Icons.add, onTap: () => showEditPrinterSheet(context, s)),
             ]),
             const SizedBox(height: 18),
@@ -155,15 +162,26 @@ class _PrintersScreenState extends State<PrintersScreen> {
             if (p.forKot) const Pill('KOT', bg: C.amberTint, fg: C.amberInk),
             if (!p.forBill && !p.forKot) const Pill('Not assigned', bg: C.soft, fg: C.muted),
             const Spacer(),
-            if (p.lastTestAt != null)
-              Row(children: [
-                Dot(color: p.lastTestOk == true ? C.green : C.red, size: 7),
-                const SizedBox(width: 6),
-                Text('Tested ${elapsed(p.lastTestAt!)} ago', style: ts(12, c: C.muted)),
-                const SizedBox(width: 12),
-              ]),
+            Btn.outline('Check',
+                height: 38,
+                fontSize: 13,
+                onTap: s.statusOf(p).health == PrinterHealth.checking ? null : () => s.checkPrinters(only: p)),
+            const SizedBox(width: 8),
             Btn.outline('Test print', height: 38, fontSize: 13, onTap: () => _testPrint(s, p)),
           ]),
+          const SizedBox(height: 12),
+          Builder(builder: (_) {
+            final st = s.statusOf(p);
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(padding: const EdgeInsets.only(top: 5), child: Dot(color: printerHealthLook(st).$1, size: 8)),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: Text(printerStatusLine(st),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: ts(13, c: st.health == PrinterHealth.offline ? C.redInk : C.ink2))),
+            ]);
+          }),
         ]),
       );
 }
@@ -286,7 +304,15 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
             ] else if (conn == PrinterConn.bluetooth) ...[
               TextField(controller: btC, style: ts(14), decoration: const InputDecoration(hintText: 'e.g. BT-Printer-04:56')),
             ] else ...[
-              TextField(controller: usbC, style: ts(14), decoration: const InputDecoration(hintText: 'e.g. /dev/usb/lp0')),
+              TextField(
+                controller: usbC,
+                style: ts(14),
+                decoration: InputDecoration(
+                  hintText: defaultTargetPlatform == TargetPlatform.windows
+                      ? 'Windows printer name, e.g. POS-80C'
+                      : 'e.g. /dev/ttyUSB0',
+                ),
+              ),
             ],
             if (scanning) ...[
               const SizedBox(height: 10),

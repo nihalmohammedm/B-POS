@@ -5,8 +5,10 @@ import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/receipt.dart';
+import '../link/captain_link.dart';
+import 'captain_actions.dart';
+import 'pair_screen.dart';
 
-const _captain = 'Captain';
 
 /// Hosts the captain app in its own navigator. On wide screens it is shown in a phone-sized frame.
 class CaptainFrame extends StatelessWidget {
@@ -45,21 +47,35 @@ class _CaptainHomeState extends State<CaptainHome> {
   bool takeaway = false;
   String? floor;
 
-  void _push(Order o) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CaptainOrderScreen(order: o)));
+  void _open(OrderRef r) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CaptainOrderScreen(ref: r)));
 
-  void openParty(TableModel t, Party p) {
+  static OrderRef refOf(Order o) => o.tableId != null ? OrderRef.party(o.tableId!, o.partyKey!) : OrderRef.order(o.id);
+
+  /// Opens a party's order. The order itself is created by the first KOT.
+  void openParty(TableModel t, String partyKey) {
     final s = StoreScope.read(context);
-    final o = s.ensurePartyOrder(t, p, server: _captain);
-    if (o.billed) {
+    final p = s.party(t.id, partyKey);
+    final o = p == null ? null : s.orderOfParty(t, p);
+    if (o != null && o.billed) {
       billingSheet(o);
       return;
     }
-    _push(o);
+    _open(OrderRef.party(t.id, partyKey));
+  }
+
+  /// Runs a captain action, turning a refusal or lost connection into a toast.
+  Future<T?> _act<T>(Future<T> Function(CaptainActions a) f) async {
+    try {
+      return await f(CaptainActions.of(context));
+    } on LinkError catch (e) {
+      if (mounted) toast(context, e.message, error: true);
+      return null;
+    }
   }
 
   void tapTable(Store s, TableModel t) {
     if (t.parties.length == 1 && t.free == 0) {
-      openParty(t, t.parties.first);
+      openParty(t, t.parties.first.key);
       return;
     }
     seatSheet(t);
@@ -89,13 +105,17 @@ class _CaptainHomeState extends State<CaptainHome> {
                 Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('Captain · ${s.outletName.isEmpty ? 'Loading…' : s.outletName}', style: ts(13, c: C.muted)),
-                  Text(_captain, style: ts(20, w: w5)),
+                  Text(CaptainActions.of(context).name, style: ts(20, w: w5)),
                 ])),
                 Pill('$active active',
                     bg: Colors.white, border: C.line, size: 13, leading: const Dot(color: C.sky, size: 7),
                     pad: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
                 const SizedBox(width: 6),
-                RoundIcon(Icons.logout, size: 40, onTap: () => Navigator.of(context, rootNavigator: true).maybePop()),
+                if (CaptainLinkScope.maybeOf(context) case final link?)
+                  RoundIcon(link.online ? Icons.wifi : Icons.wifi_off,
+                      size: 40, fg: link.online ? C.greenInk : C.redInk, tooltip: 'Connection to the POS', onTap: () => showConnectionSheet(context))
+                else
+                  RoundIcon(Icons.logout, size: 40, onTap: () => Navigator.of(context, rootNavigator: true).maybePop()),
               ]),
               const SizedBox(height: 14),
               Row(children: [
@@ -247,7 +267,7 @@ class _CaptainHomeState extends State<CaptainHome> {
           borderRadius: BorderRadius.circular(22),
           child: InkWell(
             borderRadius: BorderRadius.circular(22),
-            onTap: () => _push(s.draft(OrderType.takeaway, server: _captain)),
+            onTap: () => _open(const OrderRef.newTakeaway()),
             child: Container(
               height: 88,
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -279,7 +299,7 @@ class _CaptainHomeState extends State<CaptainHome> {
         borderRadius: BorderRadius.circular(18),
         child: InkWell(
           borderRadius: BorderRadius.circular(18),
-          onTap: () => _push(o),
+          onTap: () => _open(OrderRef.order(o.id)),
           child: Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), border: Border.all(color: C.line)),
@@ -388,10 +408,10 @@ class _CaptainHomeState extends State<CaptainHome> {
                           style: ts(13, c: C.skyInk)),
                     ),
                     const SizedBox(height: 14),
-                    Btn('Start order · $pax pax', expand: true, height: 56, fontSize: 16, onTap: () {
+                    Btn('Start order · $pax pax', expand: true, height: 56, fontSize: 16, onTap: () async {
                       Navigator.pop(ctx);
-                      final np = s.seatParty(t, pax);
-                      openParty(t, np);
+                      final key = await _act((a) => a.seat(t, pax));
+                      if (key != null && mounted) openParty(t, key);
                     }),
                   ] else ...[
                     const SizedBox(height: 14),
@@ -422,7 +442,7 @@ class _CaptainHomeState extends State<CaptainHome> {
           borderRadius: BorderRadius.circular(18),
           onTap: () {
             Navigator.pop(ctx);
-            openParty(t, p);
+            openParty(t, p.key);
           },
           child: Container(
             padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
@@ -437,7 +457,7 @@ class _CaptainHomeState extends State<CaptainHome> {
                     style: ts(13, c: C.muted)),
               ])),
               if (!hasItems)
-                TextButton(onPressed: () => s.freeParty(t, p), child: const Text('Free')),
+                TextButton(onPressed: () => _act((a) => a.freeParty(t, p)), child: const Text('Free')),
               Container(
                 height: 40,
                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -509,19 +529,25 @@ class _CaptainHomeState extends State<CaptainHome> {
           ),
           const SizedBox(height: 16),
           action(Icons.receipt_long_outlined, 'View bill',
-              () => showPrintPreview(ctx, bill: ReceiptData.bill(s, o), printLabel: 'Reprint bill')),
+              () => showPrintPreview(ctx, bill: ReceiptData.bill(s, o), canPrint: CaptainLinkScope.read(context) == null)),
           const SizedBox(height: 10),
           action(Icons.add, 'Reopen to add items', () async {
             final ok = await confirmDialog(ctx,
                 title: 'Reopen $lbl?',
                 body: 'Bill ${o.billNo} (${inr(o.total)}) will be voided. Print a new bill after adding items.',
                 ok: 'Reopen & add');
-            if (!ok) return;
-            final v = s.reopen(o);
-            if (ctx.mounted) Navigator.pop(ctx);
-            if (!mounted) return;
-            toast(context, '$lbl reopened · bill $v voided');
-            _push(o);
+            if (!ok || !ctx.mounted || !mounted) return;
+            final act = CaptainActions.of(context);
+            Navigator.pop(ctx);
+            final ref = refOf(o);
+            try {
+              final v = await act.reopen(o);
+              if (!mounted) return;
+              toast(context, '$lbl reopened · bill $v voided');
+              _open(ref);
+            } on LinkError catch (e) {
+              if (mounted) toast(context, e.message, error: true);
+            }
           }),
           const SizedBox(height: 14),
           Text('Mark as paid from the main POS', textAlign: TextAlign.center, style: ts(13, c: C.muted)),
@@ -535,24 +561,40 @@ class _CaptainHomeState extends State<CaptainHome> {
 // Order screen (typing-first)
 // =====================================================================
 class CaptainOrderScreen extends StatefulWidget {
-  final Order order;
-  const CaptainOrderScreen({super.key, required this.order});
+  final OrderRef ref;
+  const CaptainOrderScreen({super.key, required this.ref});
   @override
   State<CaptainOrderScreen> createState() => _CaptainOrderScreenState();
 }
 
 class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
+  /// Items shown under "Popular" when they exist on this menu.
   static const popular = ['g1', 'm1', 'p1', 'v2', 'b1', 's2', 'v1', 'd1'];
   String cat = 'Popular';
   final cart = <OrderLine>[];
   bool sentOpen = false;
+  bool sending = false;
   final focus = FocusNode();
   final qC = TextEditingController();
-  late final nameC = TextEditingController(text: widget.order.customer);
-  late final phoneC = TextEditingController(text: widget.order.phone);
+  late final nameC = TextEditingController(text: o.customer);
+  late final phoneC = TextEditingController(text: o.phone);
   final _tick = ValueNotifier(0);
 
-  Order get o => widget.order;
+  /// Set once the first KOT creates a new takeaway order.
+  int? _orderId;
+  Order? _blank;
+
+  /// Always the latest copy: on a paired phone the POS replaces orders with
+  /// every snapshot, so the screen looks its order up instead of holding one.
+  Order get o => CaptainActions.resolve(StoreScope.read(context), widget.ref,
+      orderId: _orderId,
+      blank: () => _blank ??= Order(
+          id: 0,
+          type: widget.ref.dineIn ? OrderType.dineIn : OrderType.takeaway,
+          tableId: widget.ref.tableId,
+          partyKey: widget.ref.partyKey,
+          server: CaptainActions.of(context).name));
+  OrderRef get ref => widget.ref.dineIn || (_orderId ?? widget.ref.orderId) == null ? widget.ref : OrderRef.order(_orderId ?? widget.ref.orderId!);
   bool get isTA => o.type != OrderType.dineIn;
   String get q => qC.text.trim().toLowerCase();
   int get cartCount => cart.fold<int>(0, (a, l) => a + l.qty);
@@ -583,7 +625,9 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
   List<MenuItem> search(Store s) {
     final x = q;
     if (x.isEmpty) {
-      return cat == 'Popular' ? popular.map(s.item).toList() : s.itemsIn(cat);
+      if (cat != 'Popular') return s.itemsIn(cat);
+      final pop = [for (final id in popular) ...s.menu.where((m) => m.id == id)];
+      return pop.isNotEmpty ? pop : s.menu.take(24).toList();
     }
     int score(MenuItem m) {
       final n = m.name.toLowerCase();
@@ -637,44 +681,67 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
         if (cart[i].qty <= 0) cart.removeAt(i);
       });
 
-  void sendKot() {
-    final s = StoreScope.read(context);
-    if (cart.isEmpty) return;
-    if (o.billed) {
+  /// Sends the cart to the main POS, which prints the KOTs. The cart is only
+  /// cleared once the POS confirms, so a Wi-Fi drop never loses an order.
+  Future<void> sendKot() async {
+    if (cart.isEmpty || sending) return;
+    final cur = o;
+    if (cur.billed) {
       toast(context, 'Bill printed · reopen the table first');
       return;
     }
-    if (isTA) {
-      o.customer = nameC.text.trim();
-      o.phone = phoneC.text.trim();
-    }
+    final act = CaptainActions.of(context);
     final n = cartCount;
-    final k = s.sendKot(o, cart);
-    setState(() {
-      cart.clear();
-      qC.clear();
-      sentOpen = true;
-    });
-    toast(context, 'KOT #${k.no} sent · ${s.labelOf(o)} · $n items');
+    setState(() => sending = true);
+    try {
+      final r = await act.sendKot(ref, [...cart], customer: nameC.text.trim(), phone: phoneC.text.trim());
+      if (!mounted) return;
+      setState(() {
+        if (!widget.ref.dineIn) _orderId = r.orderId;
+        cart.clear();
+        qC.clear();
+        sentOpen = true;
+      });
+      toast(context, '${r.kots.length == 1 ? 'KOT' : 'KOTs'} #${r.kots.join(', #')} sent · ${r.label} · $n items');
+    } on LinkError catch (e) {
+      if (mounted) toast(context, 'Not sent · ${e.message}', error: true);
+    } finally {
+      if (mounted) setState(() => sending = false);
+    }
   }
 
-  Future<void> printBill() async {
+  /// Asks the counter for the bill; the cashier prints it and takes payment.
+  Future<void> requestBill() async {
     final s = StoreScope.read(context);
-    if (o.lines.isEmpty) {
+    final cur = o;
+    if (cur.id == 0 || cur.liveLines.isEmpty) {
       toast(context, 'Nothing to bill yet');
       return;
     }
-    final ok = await showPrintPreview(context,
-        bill: ReceiptData.bill(s, o, no: s.previewBillNo(o)),
-        subtitle: cart.isNotEmpty
-            ? '$cartCount unsent items are not on this bill'
-            : (isTA ? 'Payment at the main POS' : 'Printing locks ${s.labelOf(o)} until paid at the main POS'),
-        printLabel: o.billed ? 'Reprint bill' : 'Print bill');
-    if (!ok || !mounted) return;
-    if (!isTA && !o.billed) {
-      final no = s.printBill(o);
-      toast(context, 'Bill $no printed · ${s.labelOf(o)} locked');
-      Navigator.of(context).pop();
+    if (cur.billed) {
+      await showPrintPreview(context, bill: ReceiptData.bill(s, cur), canPrint: CaptainLinkScope.read(context) == null);
+      return;
+    }
+    if (cart.isNotEmpty) {
+      final ok = await confirmDialog(context,
+          title: 'Request the bill?', body: '$cartCount unsent items are not on it. Send them first if the guest wants them.', ok: 'Request anyway');
+      if (!ok || !mounted) return;
+    }
+    try {
+      await CaptainActions.of(context).requestBill(cur);
+      if (!mounted) return;
+      toast(context, 'Bill requested at the counter · ${s.labelOf(cur)}');
+      if (!isTA && cart.isEmpty) Navigator.of(context).pop();
+    } on LinkError catch (e) {
+      if (mounted) toast(context, e.message, error: true);
+    }
+  }
+
+  Future<void> _paxTo(TableModel t, Party p, int pax) async {
+    try {
+      await CaptainActions.of(context).setPax(t, p, pax);
+    } on LinkError catch (e) {
+      if (mounted) toast(context, e.message, error: true);
     }
   }
 
@@ -684,15 +751,14 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
           title: 'Discard new items?', body: '$cartCount unsent items will be removed.', ok: 'Discard', okColor: C.red, cancel: 'Keep');
       if (!ok) return;
     }
-    if (isTA && StoreScope.read(context).orders.contains(o)) {
-      o.customer = nameC.text.trim();
-      o.phone = phoneC.text.trim();
-      StoreScope.read(context).touch();
+    if (!mounted) return;
+    final cur = o;
+    final name = nameC.text.trim(), phone = phoneC.text.trim();
+    if (isTA && cur.id != 0 && (name != cur.customer || phone != cur.phone)) {
+      CaptainActions.of(context).updateCustomer(cur, name, phone).catchError((_) {});
     }
-    if (mounted) {
-      cart.clear();
-      Navigator.of(context).pop();
-    }
+    cart.clear();
+    Navigator.of(context).pop();
   }
 
   Future<void> askClear() async {
@@ -750,10 +816,8 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                         value: p.pax,
                         size: 34,
                         suffix: ' pax',
-                        onDec: p.pax > 1 ? () => s.setPax(t!, p, p.pax - 1) : null,
-                        onInc: () {
-                          if (!s.setPax(t!, p, p.pax + 1)) toast(context, 'No free seats on ${t.id}');
-                        },
+                        onDec: p.pax > 1 ? () => _paxTo(t!, p, p.pax - 1) : null,
+                        onInc: () => _paxTo(t!, p, p.pax + 1),
                       ),
                     if (isTA) const Pill('TAKEAWAY', bg: C.purpleTint, fg: C.purpleInk, weight: w6, pad: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
                   ]),
@@ -874,12 +938,12 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                   Icon(sentOpen ? Icons.expand_less : Icons.expand_more, size: 20, color: C.muted),
                 ]),
                 if (sentOpen)
-                  for (final l in o.lines)
+                  for (final l in o.liveLines)
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
                       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Expanded(
-                            child: Text('${l.qty}× ${l.item.name}${l.optText.isNotEmpty ? '  ${l.optText}' : ''}',
+                            child: Text('${l.activeQty}× ${l.item.name}${l.optText.isNotEmpty ? '  ${l.optText}' : ''}',
                                 style: ts(14, c: C.ink2))),
                         const SizedBox(width: 8),
                         Text(l.state.label, style: ts(12, c: lineStateColors(l.state).$2)),
@@ -1019,7 +1083,16 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
           border: Border.all(color: C.line),
           boxShadow: const [BoxShadow(color: Color(0x24000000), blurRadius: 30, offset: Offset(0, 10))]),
       child: Row(children: [
-        Expanded(child: Btn.outline(o.billed ? 'Reprint bill' : 'Print bill', icon: Icons.print_outlined, expand: true, onTap: printBill)),
+        Expanded(
+            child: Btn.outline(
+                o.billed
+                    ? 'View bill'
+                    : StoreScope.of(context).requestedBills.contains(o.id)
+                        ? 'Bill requested'
+                        : 'Request bill',
+                icon: o.billed ? Icons.receipt_long_outlined : Icons.notifications_active_outlined,
+                expand: true,
+                onTap: requestBill)),
         const SizedBox(width: 8),
         Expanded(
             child: Btn('+ Add new items', expand: true, onTap: () {

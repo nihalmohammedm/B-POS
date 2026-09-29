@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
+import 'keys.dart';
 
 class StoreScope extends InheritedNotifier<Store> {
   const StoreScope({super.key, required Store store, required super.child}) : super(notifier: store);
@@ -341,22 +343,98 @@ class Choice extends StatelessWidget {
       );
 }
 
+OverlayEntry? _toastEntry;
+
+/// Short status message, bottom centre, as wide as its text. Drawn on the root
+/// overlay and ignoring touches, so it never blocks the buttons underneath and
+/// stays put across dialogs and page changes. A new toast replaces the old one.
 void toast(BuildContext context, String msg, {bool error = false}) {
-  final m = ScaffoldMessenger.maybeOf(context);
-  if (m == null) return;
-  m.hideCurrentSnackBar();
-  m.showSnackBar(SnackBar(
-    content: Row(children: [
-      Dot(color: error ? C.red : const Color(0xFF34A853)),
-      const SizedBox(width: 10),
-      Expanded(child: Text(msg, style: ts(14, c: Colors.white))),
-    ]),
-    behavior: SnackBarBehavior.floating,
-    backgroundColor: C.ink,
-    shape: const StadiumBorder(),
-    margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-    duration: const Duration(milliseconds: 2400),
-  ));
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) return;
+  _toastEntry?.remove();
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => _Toast(
+      msg: msg,
+      error: error,
+      onDone: () {
+        if (_toastEntry == entry) _toastEntry = null;
+        entry.remove();
+      },
+    ),
+  );
+  _toastEntry = entry;
+  overlay.insert(entry);
+}
+
+class _Toast extends StatefulWidget {
+  final String msg;
+  final bool error;
+  final VoidCallback onDone;
+  const _Toast({required this.msg, required this.error, required this.onDone});
+  @override
+  State<_Toast> createState() => _ToastState();
+}
+
+class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
+  late final AnimationController _a = AnimationController(vsync: this, duration: const Duration(milliseconds: 180))..forward();
+  bool _gone = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Errors stay up a little longer: they usually name a printer to go check.
+    Future.delayed(Duration(milliseconds: widget.error ? 4000 : 2400), () async {
+      if (!mounted) return;
+      await _a.reverse();
+      if (mounted && !_gone) {
+        _gone = true;
+        widget.onDone();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _a.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.viewPaddingOf(context).bottom + MediaQuery.viewInsetsOf(context).bottom + 24;
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: bottom,
+      child: IgnorePointer(
+        child: Center(
+          child: FadeTransition(
+            opacity: _a,
+            child: SlideTransition(
+              position: Tween(begin: const Offset(0, .4), end: Offset.zero).animate(CurvedAnimation(parent: _a, curve: Curves.easeOut)),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Material(
+                  color: C.ink,
+                  shape: const StadiumBorder(),
+                  elevation: 6,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Dot(color: widget.error ? C.red : const Color(0xFF34A853)),
+                      const SizedBox(width: 10),
+                      Flexible(child: Text(widget.msg, style: ts(14, c: Colors.white, h: 1.3))),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 Future<T?> showSheet<T>(BuildContext context, WidgetBuilder builder) => showModalBottomSheet<T>(
@@ -396,7 +474,13 @@ Future<bool> confirmDialog(BuildContext context,
     {required String title, required String body, String ok = 'Confirm', Color okColor = C.blue, String cancel = 'Cancel'}) async {
   final r = await showPanelDialog<bool>(context,
       maxWidth: 420,
-      builder: (ctx) => Padding(
+      builder: (ctx) => KeyScope(
+          autofocus: true,
+          keys: [
+            Hotkey(const SingleActivator(LogicalKeyboardKey.enter), () => Navigator.pop(ctx, true)),
+            Hotkey(const SingleActivator(LogicalKeyboardKey.numpadEnter), () => Navigator.pop(ctx, true)),
+          ],
+          child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(title, style: ts(20, w: w5)),
@@ -409,7 +493,7 @@ Future<bool> confirmDialog(BuildContext context,
                 Expanded(child: Btn(ok, bg: okColor, expand: true, onTap: () => Navigator.pop(ctx, true))),
               ]),
             ]),
-          ));
+          )));
   return r ?? false;
 }
 

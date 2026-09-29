@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/keys.dart';
 
 class KitchenScreen extends StatefulWidget {
   const KitchenScreen({super.key});
@@ -15,6 +17,8 @@ class KitchenScreen extends StatefulWidget {
 class _KitchenScreenState extends State<KitchenScreen> {
   OrderType? typeF;
   bool readyTab = false;
+  int? selNo;
+  int _cols = 1; // tickets per row, for ↑/↓
   Timer? _t;
   static const warnMin = 10, lateMin = 15;
 
@@ -48,7 +52,38 @@ class _KitchenScreenState extends State<KitchenScreen> {
     final lateN = active.where((k) => now.difference(k.at).inMinutes >= lateMin).length;
     int count(OrderType? t) => all.where((k) => inTab(k) && (t == null || typeOf(k) == t)).length;
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    Kot? sel;
+    for (final k in kots) {
+      if (k.no == selNo) sel = k;
+    }
+    sel ??= kots.isEmpty ? null : kots.first;
+    void move(int d) {
+      if (kots.isEmpty) return;
+      final i = sel == null ? 0 : kots.indexOf(sel);
+      setState(() => selNo = kots[(i + d).clamp(0, kots.length - 1)].no);
+    }
+
+    final keys = [
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowRight), () => move(1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowLeft), () => move(-1)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowDown), () => move(_cols)),
+      Hotkey(const SingleActivator(LogicalKeyboardKey.arrowUp), () => move(-_cols)),
+      if (sel != null) ...[
+        Hotkey(const SingleActivator(LogicalKeyboardKey.enter), () => _act(s, sel!)),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.space), () => _act(s, sel!)),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.backspace), () => s.recallKot(sel!), when: () => sel!.stage == KotStage.ready),
+      ],
+      Hotkey(const SingleActivator(LogicalKeyboardKey.keyR, alt: true), () => setState(() => readyTab = !readyTab)),
+      for (final (k, t) in [
+        (LogicalKeyboardKey.digit0, null),
+        (LogicalKeyboardKey.digit1, OrderType.dineIn),
+        (LogicalKeyboardKey.digit2, OrderType.takeaway),
+        (LogicalKeyboardKey.digit3, OrderType.delivery),
+      ])
+        Hotkey(SingleActivator(k, alt: true), () => setState(() => typeF = t)),
+    ];
+
+    return KeyScope(autofocus: true, keys: keys, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
         Seg<OrderType?>(
           height: 44,
@@ -87,19 +122,32 @@ class _KitchenScreenState extends State<KitchenScreen> {
               ]))
             : LayoutBuilder(builder: (c, cons) {
                 final cols = math.max(1, (cons.maxWidth / 290).floor());
+                _cols = cols;
                 final w = (cons.maxWidth - 12 * (cols - 1)) / cols;
                 return SingleChildScrollView(
                   child: Wrap(
                       spacing: 12,
                       runSpacing: 12,
-                      children: [for (final k in kots) SizedBox(width: w, child: _ticket(s, k))]),
+                      children: [for (final k in kots) SizedBox(width: w, child: _ticket(s, k, selected: hasKeyboard && k.no == sel?.no))]),
                 );
               }),
       ),
-    ]);
+    ]));
   }
 
-  Widget _ticket(Store s, Kot k) {
+  /// The ticket's one action: Start → Mark ready → Served / Handed over.
+  void _act(Store s, Kot k) {
+    switch (k.stage) {
+      case KotStage.fresh:
+        s.startKot(k);
+      case KotStage.preparing:
+        s.readyKot(k);
+      default:
+        s.bumpKot(k);
+    }
+  }
+
+  Widget _ticket(Store s, Kot k, {bool selected = false}) {
     final o = s.orderById(k.orderId)!;
     final el = DateTime.now().difference(k.at);
     final stage = k.stage;
@@ -111,7 +159,8 @@ class _KitchenScreenState extends State<KitchenScreen> {
       (C.greenTint, Color(0xFF14532D), Color(0xFF86EFAC)),
     ];
     final head = heads[lvl];
-    final done = k.lines.where((l) => l.state.index >= LineState.ready.index).length;
+    final live = k.lines.where((l) => l.activeQty > 0).toList();
+    final done = live.where((l) => l.state.index >= LineState.ready.index).length;
     final where = o.type == OrderType.dineIn ? 'Table ${s.labelOf(o)}' : (o.customer.isEmpty ? o.token : o.customer);
     final meta = o.type == OrderType.dineIn ? '${o.pax} pax · ${o.server}' : o.token;
     final tint = typeTint(o.type);
@@ -122,7 +171,10 @@ class _KitchenScreenState extends State<KitchenScreen> {
     };
     return Container(
       clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: head.$3)),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: selected ? C.blue : head.$3, width: selected ? 3 : 1)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Container(
           color: head.$1,
@@ -138,13 +190,21 @@ class _KitchenScreenState extends State<KitchenScreen> {
               Pill(o.type.label,
                   bg: lvl == 2 ? const Color(0x33FFFFFF) : tint.$1, fg: lvl == 2 ? Colors.white : tint.$2, weight: w6),
               const SizedBox(width: 6),
-              Text('#${k.no}', style: ts(12, c: head.$2)),
+              Text('#${k.no}${s.kotGroup(k.group) == null ? '' : ' · ${s.kotGroup(k.group)!.name}'}', style: ts(12, w: w6, c: head.$2)),
+              if (k.batch.length > 1) ...[
+                const SizedBox(width: 6),
+                Tooltip(
+                  message: 'Order also has KOT #${k.batch.where((n) => n != k.no).join(', #')}',
+                  child: Pill('${k.batch.indexOf(k.no) + 1}/${k.batch.length}',
+                      bg: lvl == 2 ? const Color(0x33FFFFFF) : C.ink, fg: Colors.white, size: 11, weight: w7),
+                ),
+              ],
               const Spacer(),
               Flexible(child: Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: head.$2))),
             ]),
           ]),
         ),
-        for (final l in k.lines)
+        for (final l in live)
           InkWell(
             onTap: () => s.toggleLine(l),
             child: Container(
@@ -153,7 +213,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 SizedBox(
                     width: 32,
-                    child: Text('${l.qty}×',
+                    child: Text('${l.activeQty}×',
                         style: ts(16, w: w7, c: l.state.index >= LineState.ready.index ? const Color(0xFFA1A1AA) : C.ink))),
                 Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -183,7 +243,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
                 child: Text(
                     stage == KotStage.ready
                         ? 'Ready for ${o.type == OrderType.dineIn ? 'service' : o.type == OrderType.delivery ? 'rider' : 'pickup'}'
-                        : '$done/${k.lines.length} done',
+                        : '$done/${live.length} done',
                     style: ts(12, c: C.muted))),
             if (stage == KotStage.ready) ...[
               Btn.outline('Recall', height: 44, onTap: () => s.recallKot(k)),

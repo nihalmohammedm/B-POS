@@ -75,21 +75,8 @@ class SupabaseAuthApi {
         .timeout(const Duration(seconds: 15));
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode >= 300) {
-      throw AuthException(body['error_description'] as String? ?? body['msg'] as String? ?? 'Sign-in failed');
-    }
-    return _sessionFromToken(body);
-  }
-
-  Future<AuthSession> signUp({required String email, required String password}) async {
-    final res = await http
-        .post(Uri.parse('$_root/auth/v1/signup'), headers: _authHeaders(), body: jsonEncode({'email': email, 'password': password}))
-        .timeout(const Duration(seconds: 15));
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode >= 300) {
-      throw AuthException(body['error_description'] as String? ?? body['msg'] as String? ?? 'Sign-up failed');
-    }
-    if (body['access_token'] == null) {
-      throw AuthException('Account created but not signed in automatically — check email confirmation settings.');
+      final msg = body['error_description'] as String? ?? body['msg'] as String? ?? 'Sign-in failed';
+      throw AuthException(msg == 'Invalid login credentials' ? 'Wrong email or password' : msg);
     }
     return _sessionFromToken(body);
   }
@@ -126,16 +113,17 @@ class SupabaseAuthApi {
     return rows.first['id'] as String;
   }
 
-  /// True once at least one staff member has been linked to [outletId] — used to
-  /// decide whether the app should offer first-run owner setup or a plain login.
-  Future<bool> outletHasAnyUser(String outletId) async {
-    final rows = await _get('', 'outlet_users', {'select': 'id', 'outlet_id': 'eq.$outletId', 'limit': '1'});
-    return rows.isNotEmpty;
-  }
-
-  Future<ProfileInfo?> fetchProfile({required String accessToken, required String authUserId, required String outletId}) async {
+  /// The signed-in user's staff profile for [outletId]: name, role, permissions.
+  /// Each step that comes back empty throws with what's missing, so a login
+  /// that fails here says why (no linked staff row, not assigned to this
+  /// outlet, role hidden) instead of a generic "not set up".
+  Future<ProfileInfo> fetchProfile({required String accessToken, required String authUserId, required String outletId}) async {
     final users = await _get(accessToken, 'users', {'select': 'id,full_name', 'auth_user_id': 'eq.$authUserId', 'limit': '1'});
-    if (users.isEmpty) return null;
+    if (users.isEmpty) {
+      throw AuthException('Password accepted, but no BPOS staff profile is linked to this login '
+          '(bpos.users with auth_user_id = $authUserId). If the profile exists, the database is hiding it from '
+          'signed-in users: check the RLS policy on bpos.users.');
+    }
     final userId = users.first['id'] as String;
     final fullName = users.first['full_name'] as String? ?? '';
 
@@ -146,11 +134,17 @@ class SupabaseAuthApi {
       'is_active': 'eq.true',
       'limit': '1',
     });
-    if (outletUsers.isEmpty) return null;
+    if (outletUsers.isEmpty) {
+      throw AuthException('${fullName.isEmpty ? 'This user' : fullName} is not assigned to this outlet, or the assignment is '
+          'inactive (bpos.outlet_users). If it exists, check the RLS policy on bpos.outlet_users.');
+    }
     final roleId = outletUsers.first['role_id'] as String;
     final role = outletUsers.first['roles'] as Map<String, dynamic>?;
-    final roleCode = role?['code'] as String? ?? '';
-    final roleName = role?['name'] as String? ?? '';
+    if (role == null) {
+      throw AuthException('Signed in, but your role could not be read (bpos.roles is hidden from signed-in users: check its RLS policy).');
+    }
+    final roleCode = role['code'] as String? ?? '';
+    final roleName = role['name'] as String? ?? '';
 
     final rolePerms = await _get(accessToken, 'role_permissions', {'select': 'permissions(code)', 'role_id': 'eq.$roleId'});
     final permissions = {
@@ -159,35 +153,5 @@ class SupabaseAuthApi {
     };
 
     return ProfileInfo(userId: userId, fullName: fullName, roleCode: roleCode, roleName: roleName, permissions: permissions);
-  }
-
-  /// Bootstraps the very first Owner account: creates the `bpos.users` profile row
-  /// and links it to [outletId] with the `owner` role. Only meant to be called right
-  /// after [signUp], and only while [outletHasAnyUser] is still false.
-  Future<ProfileInfo> createOwnerProfile({
-    required String accessToken,
-    required String authUserId,
-    required String outletId,
-    required String fullName,
-  }) async {
-    // Table grants for `bpos.users`/`bpos.outlet_users` are intentionally not open
-    // to regular authenticated writes (RLS/grants aren't set up yet per CLAUDE.md,
-    // and blanket INSERT would let anyone who signs up self-grant an owner role).
-    // Bootstrap instead goes through the guarded `bpos.bootstrap_first_owner`
-    // SECURITY DEFINER function from the seed migration, which only succeeds while
-    // the outlet truly has zero staff yet.
-    final uri = Uri.parse('$_root/rest/v1/rpc/bootstrap_first_owner');
-    final res = await http
-        .post(uri, headers: _restHeaders(accessToken), body: jsonEncode({'p_outlet_id': outletId, 'p_full_name': fullName}))
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode >= 300) {
-      final body = jsonDecode(res.body);
-      final msg = body is Map<String, dynamic> ? (body['message'] as String? ?? res.body) : res.body;
-      throw AuthException(msg);
-    }
-
-    final profile = await fetchProfile(accessToken: accessToken, authUserId: authUserId, outletId: outletId);
-    if (profile == null) throw AuthException('Owner account created but could not be loaded — try signing in again.');
-    return profile;
   }
 }

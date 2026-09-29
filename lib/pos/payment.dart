@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
 
 String _num(double v) => v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
@@ -62,7 +64,20 @@ class _PayDialogState extends State<_PayDialog> {
         : remaining > 0
             ? 'Remaining ${inr(remaining, decimals: true)}'
             : 'Over by ${inr(-remaining, decimals: true)}';
-    return Dialog(
+    void complete() {
+      if (ok) Navigator.pop(context, rows.map((r) => Payment(r.method, r.a, r.method == 'Cash' ? r.r : 0)).toList());
+    }
+
+    return KeyScope(
+      autofocus: true,
+      keys: [
+        // Enter is safe while typing here: the amount fields are single-line.
+        Hotkey(const SingleActivator(LogicalKeyboardKey.enter), complete, whileTyping: true),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.numpadEnter), complete, whileTyping: true),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.enter, control: true), complete),
+        Hotkey(const SingleActivator(LogicalKeyboardKey.keyS, control: true), addRow, when: () => rows.length < 4),
+      ],
+      child: Dialog(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
       insetPadding: const EdgeInsets.all(16),
@@ -124,6 +139,7 @@ class _PayDialogState extends State<_PayDialog> {
           ),
         ]),
       ),
+    ),
     );
   }
 
@@ -350,6 +366,12 @@ Future<void> settleFlow(BuildContext context, Order o) async {
   final s = StoreScope.read(context);
   final label = s.labelOf(o);
   List<Payment>? pays;
+  if (o.isPaid && o.payments.isNotEmpty) {
+    // Paid up front: the paid invoice was printed then; just close the order.
+    s.settle(o);
+    toast(context, '$label handed over · paid ${inr(o.paid)}');
+    return;
+  }
   if (o.isPaid) {
     pays = [Payment(o.payNote.split(' · ').last, o.total)];
   } else {
@@ -381,6 +403,10 @@ Future<void> printBillFlow(BuildContext context, Order o) async {
 Future<void> reopenFlow(BuildContext context, Order o) async {
   final s = StoreScope.read(context);
   final label = s.labelOf(o);
+  if (o.isPaid) {
+    toast(context, '$label is already paid · a paid bill can\'t be reopened', error: true);
+    return;
+  }
   final ok = await confirmDialog(context,
       title: 'Reopen $label?',
       body: 'Bill ${o.billNo} (${inr(o.total)}) will be voided. Print a new bill after adding items.',

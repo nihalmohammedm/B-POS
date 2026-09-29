@@ -1,9 +1,11 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart' hide Thumb;
+import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/keys.dart';
 
 // ---------------- Customise (variants / add-ons) ----------------
 Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderLine? initial}) {
@@ -19,7 +21,24 @@ Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderL
       maxWidth: 580,
       builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
             final line = build();
-            return Column(mainAxisSize: MainAxisSize.min, children: [
+            const digits = [
+              LogicalKeyboardKey.digit1, LogicalKeyboardKey.digit2, LogicalKeyboardKey.digit3,
+              LogicalKeyboardKey.digit4, LogicalKeyboardKey.digit5, LogicalKeyboardKey.digit6,
+              LogicalKeyboardKey.digit7, LogicalKeyboardKey.digit8, LogicalKeyboardKey.digit9,
+            ];
+            return KeyScope(
+                autofocus: true,
+                keys: [
+                  for (var i = 0; i < m.variants.length && i < 9; i++)
+                    Hotkey(SingleActivator(digits[i]), () => set(() => variant = m.variants[i].name)),
+                  Hotkey(const CharacterActivator('+'), () => set(() => qty++)),
+                  Hotkey(const CharacterActivator('-'), () => set(() => qty = qty > 1 ? qty - 1 : 1)),
+                  Hotkey(const SingleActivator(LogicalKeyboardKey.enter), () => Navigator.pop(ctx, build())),
+                  Hotkey(const SingleActivator(LogicalKeyboardKey.numpadEnter), () => Navigator.pop(ctx, build())),
+                  // Works from inside the kitchen-note box too.
+                  Hotkey(const SingleActivator(LogicalKeyboardKey.enter, control: true), () => Navigator.pop(ctx, build())),
+                ],
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 20, 16, 16),
                 child: Row(children: [
@@ -88,7 +107,7 @@ Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderL
                   ]),
                 ]),
               ),
-            ]);
+            ]));
           }));
 }
 
@@ -145,7 +164,24 @@ Future<OrderLine?> showNoteDialog(BuildContext context, OrderLine l) {
   return showPanelDialog<OrderLine>(context,
       maxWidth: 440,
       builder: (ctx) => StatefulBuilder(
-          builder: (ctx, set) => SingleChildScrollView(
+          builder: (ctx, set) => KeyScope(
+              autofocus: true,
+              keys: [
+                Hotkey(const CharacterActivator('+'), () => set(() => qty++)),
+                Hotkey(const CharacterActivator('-'), () => set(() => qty = qty > 1 ? qty - 1 : 1)),
+                // The note box is multi-line, so plain Enter stays a new line there.
+                Hotkey(const SingleActivator(LogicalKeyboardKey.enter, control: true), () => Navigator.pop(
+                    ctx,
+                    l.copy()
+                      ..qty = qty
+                      ..note = c.text.trim())),
+                Hotkey(const SingleActivator(LogicalKeyboardKey.enter), () => Navigator.pop(
+                    ctx,
+                    l.copy()
+                      ..qty = qty
+                      ..note = c.text.trim())),
+              ],
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                   Text('Edit item', style: ts(20, w: w5)),
@@ -177,7 +213,7 @@ Future<OrderLine?> showNoteDialog(BuildContext context, OrderLine l) {
                               ..note = c.text.trim())),
                   ]),
                 ]),
-              )));
+              ))));
 }
 
 // ---------------- Long-press: item availability & stock ----------------

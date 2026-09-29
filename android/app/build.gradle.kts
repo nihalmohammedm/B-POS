@@ -51,6 +51,12 @@ android {
             applicationId = "com.bpos.captain"
             resValue("string", "app_name", "BPOS Captain")
         }
+        // Kitchen display (-t lib/main_kitchen.dart): shows KOTs, rings on new ones.
+        create("kitchen") {
+            dimension = "app"
+            applicationId = "com.bpos.kitchen"
+            resValue("string", "app_name", "BPOS Kitchen")
+        }
     }
 
     buildTypes {

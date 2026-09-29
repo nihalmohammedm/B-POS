@@ -321,8 +321,10 @@ Future<void> showEditPrinterSheet(BuildContext context, Store s, {PosPrinter? ex
             if (hasScanned && found.isEmpty) ...[
               const SizedBox(height: 10),
               Text(
-                conn == PrinterConn.bluetooth
-                    ? 'No Bluetooth printers found · classic Bluetooth scanning only works on Android'
+                conn == PrinterConn.bluetooth &&
+                        defaultTargetPlatform != TargetPlatform.android &&
+                        defaultTargetPlatform != TargetPlatform.windows
+                    ? 'No Bluetooth printers found · classic Bluetooth scanning only works on Android and Windows'
                     : 'No printers found on this connection',
                 style: ts(12, c: C.muted),
               ),

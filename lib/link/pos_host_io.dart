@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 import '../models.dart';
 import '../store.dart';
 import '../widgets/receipt.dart';
@@ -27,6 +29,8 @@ class PosHost {
   final _clients = <_Client>{};
   Timer? _debounce;
   StreamSubscription<String>? _revokedSub;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  Timer? _addressRefreshTimer;
   bool get running => _server != null;
 
   /// The port actually bound (differs from [port] when started with 0 in tests).
@@ -48,6 +52,11 @@ class PosHost {
       s.addListener(_onStoreChange);
       _revokedSub = s.revokedCaptains.listen(_kick);
       s.setLinkState(running: true, addresses: await localAddresses());
+      // The device's IP can change after start() (different Wi-Fi, DHCP lease
+      // renewal) — keep the pairing screen's address current instead of freezing
+      // it at whatever it was when the server first bound.
+      _connectivitySub = Connectivity().onConnectivityChanged.listen((_) => _refreshAddresses());
+      _addressRefreshTimer = Timer.periodic(const Duration(seconds: 20), (_) => _refreshAddresses());
     } catch (e) {
       _server = null;
       s.setLinkState(running: false, error: 'Could not open port $port: $e');
@@ -58,6 +67,10 @@ class PosHost {
     _debounce?.cancel();
     s.removeListener(_onStoreChange);
     await _revokedSub?.cancel();
+    await _connectivitySub?.cancel();
+    _connectivitySub = null;
+    _addressRefreshTimer?.cancel();
+    _addressRefreshTimer = null;
     for (final c in [..._clients]) {
       c.close('stopped');
     }
@@ -67,6 +80,18 @@ class PosHost {
     _udp = null;
     s.setLinkState(running: false);
   }
+
+  /// Re-checks this machine's LAN addresses and updates the store only if they
+  /// actually changed, so this doesn't spam `notifyListeners()` every 20s.
+  Future<void> _refreshAddresses() async {
+    if (_server == null) return;
+    final addrs = await localAddresses();
+    if (_addrKey(addrs) != _addrKey(s.linkAddresses)) {
+      s.setLinkState(running: true, addresses: addrs);
+    }
+  }
+
+  String _addrKey(List<String> addrs) => (List<String>.of(addrs)..sort()).join(',');
 
   /// Answers captains broadcasting [discoveryQuery] on the Wi-Fi, so a paired
   /// captain finds this POS again after its IP address changes. Skipped for an

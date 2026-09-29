@@ -74,7 +74,13 @@ class LocalProfile {
 
 class ProfileStore {
   static const _key = 'bpos_local_profiles_v1';
-  final _storage = const FlutterSecureStorage();
+  // macOS: the default "Data Protection Keychain" API needs a keychain-access-groups
+  // entitlement tied to a real Apple Developer Team in Xcode signing, or every call
+  // fails with PlatformException(-34018, errSecMissingEntitlement) — regardless of
+  // App Sandbox. useDataProtectionKeychain: false switches to the legacy per-app
+  // keychain API, which works for local/ad-hoc-signed dev builds with no entitlement
+  // at all. Not needed on other platforms, so it's a no-op there.
+  final _storage = const FlutterSecureStorage(mOptions: MacOsOptions(usesDataProtectionKeychain: false));
   final _rand = Random.secure();
 
   String _newSalt() => base64Url.encode(List<int>.generate(16, (_) => _rand.nextInt(256)));

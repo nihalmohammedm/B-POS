@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Real distribution (signed, notarized, sandboxed) needs a proper Apple
+	     Developer Team in Xcode signing plus keychain-access-groups restored —
+	     see DebugProfile.entitlements for why. Not needed for this project's
+	     actual ship target (Android), so left unsandboxed for now like Debug. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.network.server</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
+	<false/>
 </dict>
 </plist>

@@ -2,15 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- App Sandbox off for local dev builds only (macOS isn't the ship target —
+	     Android is). Sandbox + keychain-access-groups (needed for
+	     flutter_secure_storage's Keychain use) requires a real Apple Developer
+	     Team assigned in Xcode signing; without one, the build fails with
+	     "entitlements that require signing with a development certificate."
+	     Unsandboxed apps can use Keychain without that entitlement at all. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 	<key>com.apple.security.cs.allow-jit</key>
-	<true/>
-	<key>com.apple.security.network.server</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
-	<key>com.apple.security.device.usb</key>
 	<true/>
 </dict>
 </plist>

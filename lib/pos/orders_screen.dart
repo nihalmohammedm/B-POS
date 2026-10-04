@@ -182,6 +182,11 @@ class OrderDetail extends StatelessWidget {
     OrderType.delivery: [OrderStage.preparing, OrderStage.ready, OrderStage.outForDelivery],
   };
 
+  static bool _isSettleStage(Order o, OrderStage st) =>
+      (o.type == OrderType.dineIn && st == OrderStage.billing) ||
+      (o.type == OrderType.takeaway && st == OrderStage.ready) ||
+      (o.type == OrderType.delivery && st == OrderStage.outForDelivery);
+
   (String, VoidCallback) _primary(BuildContext context, Store s, Order o, OrderStage st) {
     if (o.type == OrderType.dineIn) {
       if (st == OrderStage.billing) return ('Settle payment', () => settleFlow(context, o));
@@ -275,6 +280,8 @@ class OrderDetail extends StatelessWidget {
                       }
                     case 'bill':
                       printBillFlow(context, o);
+                    case 'settle_no_print':
+                      settleFlow(context, o, print: false);
                     case 'reopen':
                       reopenFlow(context, o);
                     case 'cancel':
@@ -285,6 +292,7 @@ class OrderDetail extends StatelessWidget {
                   if (!o.billed && o.type != OrderType.delivery) const PopupMenuItem(value: 'add', child: Text('Add items')),
                   if (kot != null) const PopupMenuItem(value: 'kot', child: Text('Reprint KOT')),
                   const PopupMenuItem(value: 'bill', child: Text('Print bill')),
+                  if (_isSettleStage(o, st)) const PopupMenuItem(value: 'settle_no_print', child: Text('Settle without printing')),
                   if (o.billed && !o.isPaid) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
                   PopupMenuItem(
                       value: 'cancel',

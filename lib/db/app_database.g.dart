@@ -1965,6 +1965,267 @@ class SettingsRowsCompanion extends UpdateCompanion<SettingsRow> {
   }
 }
 
+class $PendingBillSyncRowsTable extends PendingBillSyncRows
+    with TableInfo<$PendingBillSyncRowsTable, PendingBillSyncRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $PendingBillSyncRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _orderIdMeta =
+      const VerificationMeta('orderId');
+  @override
+  late final GeneratedColumn<int> orderId = GeneratedColumn<int>(
+      'order_id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+      'status', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('pending'));
+  static const VerificationMeta _attemptsMeta =
+      const VerificationMeta('attempts');
+  @override
+  late final GeneratedColumn<int> attempts = GeneratedColumn<int>(
+      'attempts', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _lastErrorMeta =
+      const VerificationMeta('lastError');
+  @override
+  late final GeneratedColumn<String> lastError = GeneratedColumn<String>(
+      'last_error', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [orderId, status, attempts, lastError];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'pending_bill_sync_rows';
+  @override
+  VerificationContext validateIntegrity(Insertable<PendingBillSyncRow> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('order_id')) {
+      context.handle(_orderIdMeta,
+          orderId.isAcceptableOrUnknown(data['order_id']!, _orderIdMeta));
+    }
+    if (data.containsKey('status')) {
+      context.handle(_statusMeta,
+          status.isAcceptableOrUnknown(data['status']!, _statusMeta));
+    }
+    if (data.containsKey('attempts')) {
+      context.handle(_attemptsMeta,
+          attempts.isAcceptableOrUnknown(data['attempts']!, _attemptsMeta));
+    }
+    if (data.containsKey('last_error')) {
+      context.handle(_lastErrorMeta,
+          lastError.isAcceptableOrUnknown(data['last_error']!, _lastErrorMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {orderId};
+  @override
+  PendingBillSyncRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return PendingBillSyncRow(
+      orderId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}order_id'])!,
+      status: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}status'])!,
+      attempts: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}attempts'])!,
+      lastError: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}last_error']),
+    );
+  }
+
+  @override
+  $PendingBillSyncRowsTable createAlias(String alias) {
+    return $PendingBillSyncRowsTable(attachedDatabase, alias);
+  }
+}
+
+class PendingBillSyncRow extends DataClass
+    implements Insertable<PendingBillSyncRow> {
+  final int orderId;
+
+  /// pending | synced | failed
+  final String status;
+  final int attempts;
+  final String? lastError;
+  const PendingBillSyncRow(
+      {required this.orderId,
+      required this.status,
+      required this.attempts,
+      this.lastError});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['order_id'] = Variable<int>(orderId);
+    map['status'] = Variable<String>(status);
+    map['attempts'] = Variable<int>(attempts);
+    if (!nullToAbsent || lastError != null) {
+      map['last_error'] = Variable<String>(lastError);
+    }
+    return map;
+  }
+
+  PendingBillSyncRowsCompanion toCompanion(bool nullToAbsent) {
+    return PendingBillSyncRowsCompanion(
+      orderId: Value(orderId),
+      status: Value(status),
+      attempts: Value(attempts),
+      lastError: lastError == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastError),
+    );
+  }
+
+  factory PendingBillSyncRow.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return PendingBillSyncRow(
+      orderId: serializer.fromJson<int>(json['orderId']),
+      status: serializer.fromJson<String>(json['status']),
+      attempts: serializer.fromJson<int>(json['attempts']),
+      lastError: serializer.fromJson<String?>(json['lastError']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'orderId': serializer.toJson<int>(orderId),
+      'status': serializer.toJson<String>(status),
+      'attempts': serializer.toJson<int>(attempts),
+      'lastError': serializer.toJson<String?>(lastError),
+    };
+  }
+
+  PendingBillSyncRow copyWith(
+          {int? orderId,
+          String? status,
+          int? attempts,
+          Value<String?> lastError = const Value.absent()}) =>
+      PendingBillSyncRow(
+        orderId: orderId ?? this.orderId,
+        status: status ?? this.status,
+        attempts: attempts ?? this.attempts,
+        lastError: lastError.present ? lastError.value : this.lastError,
+      );
+  PendingBillSyncRow copyWithCompanion(PendingBillSyncRowsCompanion data) {
+    return PendingBillSyncRow(
+      orderId: data.orderId.present ? data.orderId.value : this.orderId,
+      status: data.status.present ? data.status.value : this.status,
+      attempts: data.attempts.present ? data.attempts.value : this.attempts,
+      lastError: data.lastError.present ? data.lastError.value : this.lastError,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingBillSyncRow(')
+          ..write('orderId: $orderId, ')
+          ..write('status: $status, ')
+          ..write('attempts: $attempts, ')
+          ..write('lastError: $lastError')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(orderId, status, attempts, lastError);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is PendingBillSyncRow &&
+          other.orderId == this.orderId &&
+          other.status == this.status &&
+          other.attempts == this.attempts &&
+          other.lastError == this.lastError);
+}
+
+class PendingBillSyncRowsCompanion extends UpdateCompanion<PendingBillSyncRow> {
+  final Value<int> orderId;
+  final Value<String> status;
+  final Value<int> attempts;
+  final Value<String?> lastError;
+  const PendingBillSyncRowsCompanion({
+    this.orderId = const Value.absent(),
+    this.status = const Value.absent(),
+    this.attempts = const Value.absent(),
+    this.lastError = const Value.absent(),
+  });
+  PendingBillSyncRowsCompanion.insert({
+    this.orderId = const Value.absent(),
+    this.status = const Value.absent(),
+    this.attempts = const Value.absent(),
+    this.lastError = const Value.absent(),
+  });
+  static Insertable<PendingBillSyncRow> custom({
+    Expression<int>? orderId,
+    Expression<String>? status,
+    Expression<int>? attempts,
+    Expression<String>? lastError,
+  }) {
+    return RawValuesInsertable({
+      if (orderId != null) 'order_id': orderId,
+      if (status != null) 'status': status,
+      if (attempts != null) 'attempts': attempts,
+      if (lastError != null) 'last_error': lastError,
+    });
+  }
+
+  PendingBillSyncRowsCompanion copyWith(
+      {Value<int>? orderId,
+      Value<String>? status,
+      Value<int>? attempts,
+      Value<String?>? lastError}) {
+    return PendingBillSyncRowsCompanion(
+      orderId: orderId ?? this.orderId,
+      status: status ?? this.status,
+      attempts: attempts ?? this.attempts,
+      lastError: lastError ?? this.lastError,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (orderId.present) {
+      map['order_id'] = Variable<int>(orderId.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (attempts.present) {
+      map['attempts'] = Variable<int>(attempts.value);
+    }
+    if (lastError.present) {
+      map['last_error'] = Variable<String>(lastError.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingBillSyncRowsCompanion(')
+          ..write('orderId: $orderId, ')
+          ..write('status: $status, ')
+          ..write('attempts: $attempts, ')
+          ..write('lastError: $lastError')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1980,6 +2241,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ItemOffRowsTable itemOffRows = $ItemOffRowsTable(this);
   late final $CatOffRowsTable catOffRows = $CatOffRowsTable(this);
   late final $SettingsRowsTable settingsRows = $SettingsRowsTable(this);
+  late final $PendingBillSyncRowsTable pendingBillSyncRows =
+      $PendingBillSyncRowsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1995,7 +2258,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         stockRows,
         itemOffRows,
         catOffRows,
-        settingsRows
+        settingsRows,
+        pendingBillSyncRows
       ];
 }
 
@@ -3355,6 +3619,168 @@ typedef $$SettingsRowsTableProcessedTableManager = ProcessedTableManager<
     ),
     SettingsRow,
     PrefetchHooks Function()>;
+typedef $$PendingBillSyncRowsTableCreateCompanionBuilder
+    = PendingBillSyncRowsCompanion Function({
+  Value<int> orderId,
+  Value<String> status,
+  Value<int> attempts,
+  Value<String?> lastError,
+});
+typedef $$PendingBillSyncRowsTableUpdateCompanionBuilder
+    = PendingBillSyncRowsCompanion Function({
+  Value<int> orderId,
+  Value<String> status,
+  Value<int> attempts,
+  Value<String?> lastError,
+});
+
+class $$PendingBillSyncRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $PendingBillSyncRowsTable> {
+  $$PendingBillSyncRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get orderId => $composableBuilder(
+      column: $table.orderId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get status => $composableBuilder(
+      column: $table.status, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get attempts => $composableBuilder(
+      column: $table.attempts, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastError => $composableBuilder(
+      column: $table.lastError, builder: (column) => ColumnFilters(column));
+}
+
+class $$PendingBillSyncRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $PendingBillSyncRowsTable> {
+  $$PendingBillSyncRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get orderId => $composableBuilder(
+      column: $table.orderId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get status => $composableBuilder(
+      column: $table.status, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get attempts => $composableBuilder(
+      column: $table.attempts, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastError => $composableBuilder(
+      column: $table.lastError, builder: (column) => ColumnOrderings(column));
+}
+
+class $$PendingBillSyncRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $PendingBillSyncRowsTable> {
+  $$PendingBillSyncRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get orderId =>
+      $composableBuilder(column: $table.orderId, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<int> get attempts =>
+      $composableBuilder(column: $table.attempts, builder: (column) => column);
+
+  GeneratedColumn<String> get lastError =>
+      $composableBuilder(column: $table.lastError, builder: (column) => column);
+}
+
+class $$PendingBillSyncRowsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $PendingBillSyncRowsTable,
+    PendingBillSyncRow,
+    $$PendingBillSyncRowsTableFilterComposer,
+    $$PendingBillSyncRowsTableOrderingComposer,
+    $$PendingBillSyncRowsTableAnnotationComposer,
+    $$PendingBillSyncRowsTableCreateCompanionBuilder,
+    $$PendingBillSyncRowsTableUpdateCompanionBuilder,
+    (
+      PendingBillSyncRow,
+      BaseReferences<_$AppDatabase, $PendingBillSyncRowsTable,
+          PendingBillSyncRow>
+    ),
+    PendingBillSyncRow,
+    PrefetchHooks Function()> {
+  $$PendingBillSyncRowsTableTableManager(
+      _$AppDatabase db, $PendingBillSyncRowsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$PendingBillSyncRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$PendingBillSyncRowsTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$PendingBillSyncRowsTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> orderId = const Value.absent(),
+            Value<String> status = const Value.absent(),
+            Value<int> attempts = const Value.absent(),
+            Value<String?> lastError = const Value.absent(),
+          }) =>
+              PendingBillSyncRowsCompanion(
+            orderId: orderId,
+            status: status,
+            attempts: attempts,
+            lastError: lastError,
+          ),
+          createCompanionCallback: ({
+            Value<int> orderId = const Value.absent(),
+            Value<String> status = const Value.absent(),
+            Value<int> attempts = const Value.absent(),
+            Value<String?> lastError = const Value.absent(),
+          }) =>
+              PendingBillSyncRowsCompanion.insert(
+            orderId: orderId,
+            status: status,
+            attempts: attempts,
+            lastError: lastError,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable<$PendingBillSyncRowsTable, PendingBillSyncRow>(
+                        table),
+                    BaseReferences<_$AppDatabase, $PendingBillSyncRowsTable,
+                        PendingBillSyncRow>(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$PendingBillSyncRowsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $PendingBillSyncRowsTable,
+    PendingBillSyncRow,
+    $$PendingBillSyncRowsTableFilterComposer,
+    $$PendingBillSyncRowsTableOrderingComposer,
+    $$PendingBillSyncRowsTableAnnotationComposer,
+    $$PendingBillSyncRowsTableCreateCompanionBuilder,
+    $$PendingBillSyncRowsTableUpdateCompanionBuilder,
+    (
+      PendingBillSyncRow,
+      BaseReferences<_$AppDatabase, $PendingBillSyncRowsTable,
+          PendingBillSyncRow>
+    ),
+    PendingBillSyncRow,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3381,4 +3807,6 @@ class $AppDatabaseManager {
       $$CatOffRowsTableTableManager(_db, _db.catOffRows);
   $$SettingsRowsTableTableManager get settingsRows =>
       $$SettingsRowsTableTableManager(_db, _db.settingsRows);
+  $$PendingBillSyncRowsTableTableManager get pendingBillSyncRows =>
+      $$PendingBillSyncRowsTableTableManager(_db, _db.pendingBillSyncRows);
 }

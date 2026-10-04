@@ -80,6 +80,9 @@ class Addon {
 
 class MenuItem {
   final String id, code, cat, name, desc;
+  /// Optional grouping label within [cat], shown as a sub-category tile once the
+  /// category is opened. Empty string = no sub-category.
+  final String subCat;
   final double price;
   final bool veg, bestseller;
   final List<Variant> variants;
@@ -95,6 +98,7 @@ class MenuItem {
     required this.cat,
     required this.name,
     required this.price,
+    this.subCat = '',
     this.veg = false,
     this.desc = '',
     this.bestseller = false,
@@ -120,6 +124,7 @@ class MenuItem {
       id == other.id &&
       code == other.code &&
       cat == other.cat &&
+      subCat == other.subCat &&
       name == other.name &&
       desc == other.desc &&
       price == other.price &&
@@ -131,12 +136,13 @@ class MenuItem {
       kotGroup == other.kotGroup;
 
   @override
-  int get hashCode => Object.hash(id, code, cat, name, desc, price, veg, bestseller);
+  int get hashCode => Object.hash(id, code, cat, subCat, name, desc, price, veg, bestseller);
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'code': code,
         'cat': cat,
+        'subCat': subCat,
         'name': name,
         'desc': desc,
         'price': price,
@@ -152,6 +158,7 @@ class MenuItem {
         id: j['id'] as String,
         code: j['code'] as String,
         cat: j['cat'] as String,
+        subCat: j['subCat'] as String? ?? '',
         name: j['name'] as String,
         desc: j['desc'] as String? ?? '',
         price: (j['price'] as num).toDouble(),
@@ -609,8 +616,12 @@ class TableModel {
   String floor;
   int seats, w, h;
   String? reservedFor;
+  /// `bpos.tables.id` for this table (table_number [id] is the join key used
+  /// when syncing menu/tables) — null until a menu sync has populated it.
+  /// Needed by background bill sync to open a `table_sessions` row.
+  String? remoteId;
   final List<Party> parties = [];
-  TableModel(this.id, this.floor, this.seats, {this.w = 1, this.h = 1, this.reservedFor});
+  TableModel(this.id, this.floor, this.seats, {this.w = 1, this.h = 1, this.reservedFor, this.remoteId});
   int get used => parties.fold<int>(0, (a, p) => a + p.pax);
   int get free => seats - used;
 
@@ -620,6 +631,7 @@ class TableModel {
         'seats': seats,
         'w': w,
         'h': h,
+        'remoteId': remoteId,
         'parties': parties.map((p) => p.toJson()).toList(),
       };
   factory TableModel.fromJson(Map<String, dynamic> j) {
@@ -629,6 +641,7 @@ class TableModel {
       j['seats'] as int,
       w: j['w'] as int? ?? 1,
       h: j['h'] as int? ?? 1,
+      remoteId: j['remoteId'] as String?,
     );
     t.parties.addAll((j['parties'] as List? ?? []).map((e) => Party.fromJson(e as Map<String, dynamic>)));
     return t;

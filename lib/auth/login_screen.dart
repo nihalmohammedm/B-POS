@@ -10,7 +10,11 @@ class LoginScreen extends StatefulWidget {
   final String outletName;
   final Future<String?> Function(String email, String password) onSubmit;
   final VoidCallback? onCancel;
-  const LoginScreen({super.key, required this.outletName, required this.onSubmit, this.onCancel});
+  const LoginScreen(
+      {super.key,
+      required this.outletName,
+      required this.onSubmit,
+      this.onCancel});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -19,6 +23,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _passwordFocus = FocusNode();
   bool _obscure = true;
   bool _busy = false;
   String? _error;
@@ -44,6 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
@@ -55,63 +61,90 @@ class _LoginScreenState extends State<LoginScreen> {
               padding: const EdgeInsets.all(24),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 380),
-                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  if (widget.onCancel != null)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        onPressed: widget.onCancel,
-                        icon: const Icon(Icons.arrow_back, color: C.ink),
-                      ),
-                    ),
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: const BoxDecoration(color: C.blueDeep, shape: BoxShape.circle),
-                    alignment: Alignment.center,
-                    child: Container(
-                        width: 20,
-                        height: 20,
-                        decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 4))),
-                  ),
-                  const SizedBox(height: 16),
-                  Text('BPOS', style: ts(24, w: w6)),
-                  const SizedBox(height: 4),
-                  Text(widget.outletName.isEmpty ? 'Sign in to continue' : widget.outletName, style: ts(14, c: C.muted)),
-                  const SizedBox(height: 28),
-                  const Label('Username'),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: _email,
-                    autofillHints: const [AutofillHints.username, AutofillHints.email],
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(hintText: 'you@outlet.com'),
-                  ),
-                  const SizedBox(height: 16),
-                  const Label('Password'),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: _password,
-                    obscureText: _obscure,
-                    autofillHints: const [AutofillHints.password],
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _busy ? null : _submit(),
-                    decoration: InputDecoration(
-                      hintText: 'Password',
-                      suffixIcon: IconButton(
-                        icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined, size: 20),
-                        onPressed: () => setState(() => _obscure = !_obscure),
-                      ),
-                    ),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 14),
-                    Text(_error!, style: ts(13, c: C.red, w: w5)),
-                  ],
-                  const SizedBox(height: 24),
-                  Btn(_busy ? 'Signing in…' : 'Sign in', expand: true, onTap: _busy ? null : _submit),
-                ]),
+                child: FocusTraversalGroup(
+                  policy: OrderedTraversalPolicy(),
+                  child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (widget.onCancel != null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: IconButton(
+                              onPressed: widget.onCancel,
+                              icon: const Icon(Icons.arrow_back, color: C.ink),
+                            ),
+                          ),
+                        Container(
+                          width: 56,
+                          height: 56,
+                          decoration: const BoxDecoration(
+                              color: C.blueDeep, shape: BoxShape.circle),
+                          alignment: Alignment.center,
+                          child: Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                      color: Colors.white, width: 4))),
+                        ),
+                        const SizedBox(height: 16),
+                        Text('BPOS', style: ts(24, w: w6)),
+                        const SizedBox(height: 4),
+                        Text(
+                            widget.outletName.isEmpty
+                                ? 'Sign in to continue'
+                                : widget.outletName,
+                            style: ts(14, c: C.muted)),
+                        const SizedBox(height: 28),
+                        const Label('Username'),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: _email,
+                          autofocus: true,
+                          onSubmitted: (_) => _passwordFocus.requestFocus(),
+                          autofillHints: const [
+                            AutofillHints.username,
+                            AutofillHints.email
+                          ],
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.next,
+                          decoration:
+                              const InputDecoration(hintText: 'you@outlet.com'),
+                        ),
+                        const SizedBox(height: 16),
+                        const Label('Password'),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: _password,
+                          focusNode: _passwordFocus,
+                          obscureText: _obscure,
+                          autofillHints: const [AutofillHints.password],
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _busy ? null : _submit(),
+                          decoration: InputDecoration(
+                            hintText: 'Password',
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                  _obscure
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined,
+                                  size: 20),
+                              onPressed: () =>
+                                  setState(() => _obscure = !_obscure),
+                            ),
+                          ),
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 14),
+                          Text(_error!, style: ts(13, c: C.red, w: w5)),
+                        ],
+                        const SizedBox(height: 24),
+                        Btn(_busy ? 'Signing in…' : 'Sign in',
+                            expand: true, onTap: _busy ? null : _submit),
+                      ]),
+                ),
               ),
             ),
           ),

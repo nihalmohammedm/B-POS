@@ -437,6 +437,8 @@ class _TableDetailsState extends State<TableDetails> {
       Row(children: [
         RoundIcon(Icons.print_outlined, size: 52, onTap: () => printBillFlow(context, o), tooltip: 'Print bill'),
         const SizedBox(width: 10),
+        RoundIcon(Icons.print_disabled_outlined, size: 52, onTap: () => settleFlow(context, o, print: false), tooltip: 'Settle without printing'),
+        const SizedBox(width: 10),
         Expanded(
           child: o.billed
               ? Btn.outline('Reopen', expand: true, onTap: () => reopenFlow(context, o))

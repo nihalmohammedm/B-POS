@@ -58,19 +58,22 @@ class BackofficeApi {
     );
 
     final cats = await _get('categories', {
-      'select': 'id,name,display_order',
+      'select': 'id,name,display_order,parent_id',
       'outlet_id': 'eq.$outletId',
       'is_active': 'eq.true',
       'order': 'display_order.asc',
     });
     final catNameById = {for (final c in cats) c['id'] as String: c['name'] as String};
-    final categoryNames = [for (final c in cats) c['name'] as String];
+    // A category with a `parent_id` is a sub-category (e.g. "Alfaham" under "Grill") — it
+    // shows up as a chip inside its parent on the POS, not as its own top-level tile.
+    final parentIdByCat = {for (final c in cats) c['id'] as String: c['parent_id'] as String?};
+    final categoryNames = [for (final c in cats) if (c['parent_id'] == null) c['name'] as String];
 
     // No floor/section or shape column exists yet, so every synced table lands in one flat
     // group and its tile shape is inferred from seat count: small tables render as a square,
     // bigger ones as a wider rectangle.
     final tableRows = await _get('tables', {
-      'select': 'table_number,maximum_occupancy,display_order',
+      'select': 'id,table_number,maximum_occupancy,display_order',
       'outlet_id': 'eq.$outletId',
       'is_active': 'eq.true',
       'order': 'display_order.asc',
@@ -80,7 +83,7 @@ class BackofficeApi {
         () {
           final seats = t['maximum_occupancy'] as int;
           final (w, h) = switch (seats) { <= 4 => (1, 1), <= 8 => (2, 1), _ => (2, 2) };
-          return TableModel(t['table_number'] as String, 'Tables', seats, w: w, h: h);
+          return TableModel(t['table_number'] as String, 'Tables', seats, w: w, h: h, remoteId: t['id'] as String?);
         }()
     ];
 
@@ -180,10 +183,15 @@ class BackofficeApi {
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
           .toList();
+      // A product's category_id may point straight at a sub-category (e.g. "Alfaham");
+      // resolve up to its parent for the top-level tile, keeping the leaf as subCat.
+      final rawCatId = p['category_id'] as String?;
+      final parentId = parentIdByCat[rawCatId];
       items.add(MenuItem(
         id: pid,
         code: p['item_code'] as String? ?? '',
-        cat: catNameById[p['category_id']] ?? 'Uncategorised',
+        cat: catNameById[parentId ?? rawCatId] ?? 'Uncategorised',
+        subCat: parentId == null ? '' : (catNameById[rawCatId] ?? ''),
         name: p['name'] as String,
         desc: p['description'] as String? ?? '',
         price: basePrice ?? (itemVariants.isNotEmpty ? itemVariants.first.price : 0),

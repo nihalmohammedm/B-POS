@@ -385,39 +385,51 @@ Future<void> showCategoryManage(BuildContext context, String c, {void Function(M
           Flexible(
             child: Opacity(
               opacity: on ? 1 : .5,
-              child: ListView(shrinkWrap: true, children: [
-                for (final m in items)
-                  Container(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: C.soft))),
-                    child: Row(children: [
-                      Expanded(
-                        child: InkWell(
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            showItemManage(context, m, onAdd: onAdd == null ? null : () => onAdd(m));
-                          },
-                          child: Row(children: [
-                            Thumb(m, size: 44),
-                            const SizedBox(width: 12),
-                            Expanded(
-                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Row(children: [
-                                Dot(color: m.veg ? C.green : C.red, square: true, size: 7),
-                                const SizedBox(width: 6),
-                                Flexible(child: Text(m.name, overflow: TextOverflow.ellipsis, style: ts(15, w: w5))),
-                              ]),
-                              Text(
-                                  '${inr(m.fromPrice)}${s.stock[m.id] == 0 ? ' · Sold out' : s.stock[m.id] != null ? ' · ${s.stock[m.id]} left' : ''}',
-                                  style: ts(13, c: s.stock[m.id] == 0 ? C.redInk : C.muted)),
-                            ])),
-                          ]),
+              child: Builder(builder: (_) {
+                final ungrouped = items.where((m) => m.subCat.isEmpty).toList();
+                final subCats = <String>[];
+                final seen = <String>{};
+                for (final m in items) {
+                  if (m.subCat.isNotEmpty && seen.add(m.subCat)) subCats.add(m.subCat);
+                }
+                Widget row(MenuItem m) => Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: C.soft))),
+                      child: Row(children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              showItemManage(context, m, onAdd: onAdd == null ? null : () => onAdd(m));
+                            },
+                            child: Row(children: [
+                              Thumb(m, size: 44),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Row(children: [
+                                  Dot(color: m.veg ? C.green : C.red, square: true, size: 7),
+                                  const SizedBox(width: 6),
+                                  Flexible(child: Text(m.name, overflow: TextOverflow.ellipsis, style: ts(15, w: w5))),
+                                ]),
+                                Text(
+                                    '${inr(m.fromPrice)}${s.stock[m.id] == 0 ? ' · Sold out' : s.stock[m.id] != null ? ' · ${s.stock[m.id]} left' : ''}',
+                                    style: ts(13, c: s.stock[m.id] == 0 ? C.redInk : C.muted)),
+                              ])),
+                            ]),
+                          ),
                         ),
-                      ),
-                      Toggle(scale: .8, value: !s.itemOff.contains(m.id), onChanged: on ? (v) => s.setItemOn(m.id, v) : null),
-                    ]),
-                  ),
-              ]),
+                        Toggle(scale: .8, value: !s.itemOff.contains(m.id), onChanged: on ? (v) => s.setItemOn(m.id, v) : null),
+                      ]),
+                    );
+                return ListView(shrinkWrap: true, children: [
+                  for (final m in ungrouped) row(m),
+                  for (final sc in subCats) ...[
+                    Padding(padding: const EdgeInsets.only(top: 12, bottom: 6), child: Label(sc)),
+                    for (final m in items.where((m) => m.subCat == sc)) row(m),
+                  ],
+                ]);
+              }),
             ),
           ),
           const SizedBox(height: 16),
@@ -464,46 +476,58 @@ Future<(String, String)?> showTablePicker(BuildContext context) {
                             final p = t.parties[i];
                             final o = s.orderOfParty(t, p);
                             final billed = o?.billed == true;
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-                              decoration:
-                                  BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: C.line)),
-                              child: Row(children: [
-                                Dot(color: billed ? C.amber : partyColors[i % partyColors.length], size: 10),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Text(s.partyLabel(t, p.key), style: ts(16, w: w5)),
-                                  Text(
-                                      '${p.pax} pax · ${elapsed(p.seatedAt)}${o != null && o.lines.isNotEmpty ? ' · ${inr(o.total)}' : ''}',
-                                      style: ts(13, c: C.muted)),
-                                ])),
-                                billed
-                                    ? const Pill('Billing', bg: C.amberTint, fg: C.amberInk)
-                                    : Btn('Select', height: 40, bg: C.ink, onTap: () => Navigator.pop(ctx, (t.id, p.key))),
-                              ]),
+                            return Material(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(16),
+                                onTap: billed ? null : () => Navigator.pop(ctx, (t.id, p.key)),
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                                  decoration:
+                                      BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: C.line)),
+                                  child: Row(children: [
+                                    Dot(color: billed ? C.amber : partyColors[i % partyColors.length], size: 10),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                      Text(s.partyLabel(t, p.key), style: ts(16, w: w5)),
+                                      Text(
+                                          '${p.pax} pax · ${elapsed(p.seatedAt)}${o != null && o.lines.isNotEmpty ? ' · ${inr(o.total)}' : ''}',
+                                          style: ts(13, c: C.muted)),
+                                    ])),
+                                    if (billed)
+                                      const Pill('Billing', bg: C.amberTint, fg: C.amberInk)
+                                    else
+                                      const Icon(Icons.chevron_right, color: C.muted),
+                                  ]),
+                                ),
+                              ),
                             );
                           }),
-                        const SizedBox(height: 10),
+                        if (t.free > 0) const SizedBox(height: 18),
                       ],
                       if (t.free > 0) ...[
-                        Label(t.parties.isEmpty ? 'How many people?' : 'Seat another party'),
-                        const SizedBox(height: 10),
-                        Wrap(spacing: 8, runSpacing: 8, children: [
-                          for (var n = 1; n <= t.free; n++) Choice('$n', on: n == pax, onTap: () => set(() => pax = n)),
-                        ]),
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(color: C.skyTint, borderRadius: BorderRadius.circular(12)),
-                          child: Text(
-                              t.free - pax == 0
-                                  ? (t.parties.isEmpty ? 'Whole table for this party' : 'Table will be full')
-                                  : '${t.free - pax} seat${t.free - pax == 1 ? '' : 's'} stay open to share',
-                              style: ts(13, c: C.skyInk)),
-                        ),
+                        Label(t.parties.isEmpty ? 'How many guests?' : 'Seat another party'),
                         const SizedBox(height: 12),
+                        Row(children: [
+                          QtyStepper(
+                            value: pax,
+                            size: 44,
+                            onDec: pax > 1 ? () => set(() => pax--) : null,
+                            onInc: pax < t.free ? () => set(() => pax++) : null,
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                                t.free - pax == 0
+                                    ? (t.parties.isEmpty ? 'Whole table for this party' : 'Fills the table')
+                                    : '${t.free - pax} seat${t.free - pax == 1 ? '' : 's'} left to share',
+                                style: ts(13, c: C.muted)),
+                          ),
+                        ]),
+                        const SizedBox(height: 16),
                         Btn('Seat $pax & select', expand: true, onTap: () {
                           final p = s.seatParty(t, pax);
                           Navigator.pop(ctx, (t.id, p.key));

@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import '../store.dart';
+import '../sync/bill_sync_api.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'captains_screen.dart';
 import 'kot_groups_screen.dart';
 import 'print_layout_screen.dart';
 import 'printers_screen.dart';
+import 'settled_bills_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -82,6 +84,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _connectionPanel(s),
                       const SizedBox(height: 16),
                       _syncPanel(s),
+                      const SizedBox(height: 16),
+                      _billSyncPanel(s),
                       const SizedBox(height: 16),
                       _printersPanel(s),
                       const SizedBox(height: 16),
@@ -176,6 +180,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (s.lastSyncResult!.changed == 0) const Pill('Up to date', bg: C.soft),
           ]),
         ],
+      ]),
+    );
+  }
+
+  Widget _billSyncPanel(Store s) {
+    final bills = s.settledBills;
+    final failed = bills.where((o) => s.billSyncStatus[o.id]?.state == BillSyncState.failed).length;
+    final pending = bills.where((o) => s.billSyncStatus[o.id]?.state != BillSyncState.synced && s.billSyncStatus[o.id]?.state != BillSyncState.failed).length;
+    return Panel(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Settled bills', style: ts(17, w: w5)),
+            const SizedBox(height: 4),
+            Text('Each settled bill syncs to Supabase in the background.', style: ts(13, c: C.muted, h: 1.4)),
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              Pill('${bills.length} settled', bg: C.soft),
+              if (pending > 0) Pill('$pending syncing', bg: C.amberTint, fg: C.amberInk),
+              if (failed > 0) Pill('$failed failed', bg: C.redTint, fg: C.redInk),
+            ]),
+          ]),
+        ),
+        Btn.outline('View',
+            icon: Icons.chevron_right,
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettledBillsScreen()))),
       ]),
     );
   }

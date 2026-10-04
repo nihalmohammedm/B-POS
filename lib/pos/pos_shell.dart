@@ -26,6 +26,7 @@ class PosShell extends StatefulWidget {
 class _PosShellState extends State<PosShell> {
   int tab = 0;
   Order? target;
+  OrderType _startType = OrderType.dineIn;
   int _gen = 0;
   StreamSubscription<(String, bool)>? _notices;
   int _requestsSeen = 0;
@@ -110,6 +111,16 @@ class _PosShellState extends State<PosShell> {
 
   void openOrderTaking(Order o) => setState(() {
         target = o;
+        _startType = o.type;
+        tab = 0;
+        _gen++;
+      });
+
+  /// Counter sale, no table: lands directly on Takeaway with a fresh cart,
+  /// skipping the "New order opens on Dine-in, then switch type" detour.
+  void fastBilling() => setState(() {
+        target = null;
+        _startType = OrderType.takeaway;
         tab = 0;
         _gen++;
       });
@@ -124,7 +135,7 @@ class _PosShellState extends State<PosShell> {
     if (served.isNotEmpty && served.last.id != _lastServed) SystemSound.play(SystemSoundType.alert);
     _lastServed = served.isEmpty ? null : served.last.id;
     final body = switch (tab) {
-      0 => OrderTakingScreen(key: ValueKey('ot$_gen'), target: target, onDone: () => target = null),
+      0 => OrderTakingScreen(key: ValueKey('ot$_gen'), target: target, startType: _startType, onDone: () => target = null),
       1 => TablesScreen(onAddItems: openOrderTaking),
       2 => OrdersScreen(onAddItems: openOrderTaking),
       3 => const PaymentsScreen(),
@@ -132,7 +143,11 @@ class _PosShellState extends State<PosShell> {
     };
     void go(int v) => setState(() {
           tab = v;
-          if (v != 0) target = null;
+          if (v != 0) {
+            target = null;
+          } else {
+            _startType = OrderType.dineIn;
+          }
         });
     void settings() => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
     final tabKeys = [LogicalKeyboardKey.f1, LogicalKeyboardKey.f2, LogicalKeyboardKey.f3, LogicalKeyboardKey.f4, LogicalKeyboardKey.f5];
@@ -144,6 +159,7 @@ class _PosShellState extends State<PosShell> {
           Hotkey(SingleActivator(tabKeys[i]), () => go(i)),
           Hotkey(SingleActivator(digitKeys[i], control: true), () => go(i)),
         ],
+        Hotkey(const SingleActivator(LogicalKeyboardKey.keyB, alt: true), fastBilling),
         Hotkey(const SingleActivator(LogicalKeyboardKey.comma, control: true), settings),
         Hotkey(const SingleActivator(LogicalKeyboardKey.keyP, control: true, shift: true), () => showPrinterStatus(context)),
         Hotkey(const SingleActivator(LogicalKeyboardKey.f12), () => showShortcutHelp(context)),
@@ -192,6 +208,8 @@ class _PosShellState extends State<PosShell> {
                   ]),
                 ),
               ),
+              const SizedBox(width: 12),
+              Btn('Fast billing', icon: Icons.bolt, height: 40, bg: C.amber, fg: C.amberInk, onTap: fastBilling),
               const SizedBox(width: 12),
               const PrinterStatusChip(),
               const SizedBox(width: 12),

@@ -5,11 +5,13 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:unified_esc_pos_printer/unified_esc_pos_printer.dart' as esc;
+import 'auth/supabase_auth_api.dart';
 import 'backoffice_api.dart';
 import 'db/app_database.dart';
 import 'models.dart';
 import 'link/link_models.dart';
 import 'print_layout.dart';
+import 'sync/bill_sync_api.dart';
 
 class Store extends ChangeNotifier {
   /// [mirror]: a captain device's copy of the main POS. Its data comes from the
@@ -171,6 +173,7 @@ class Store extends ChangeNotifier {
 
     final historyRows = await _db.select(_db.historyRows).get();
     history.addAll(historyRows.map((r) => Order.fromJson(jsonDecode(r.json) as Map<String, dynamic>)));
+    await _loadBillSyncStatus();
 
     final itemOffRows = await _db.select(_db.itemOffRows).get();
     itemOff.addAll(itemOffRows.map((r) => r.id));
@@ -307,6 +310,137 @@ class Store extends ChangeNotifier {
       await syncMenu();
     } catch (_) {
       // lastSyncError is already set by syncMenu; Settings surfaces it.
+    }
+    await _syncPendingBills();
+  }
+
+  // ---------- settled-bill sync (Supabase) ----------
+  // Pushes every settled bill (table session + party + order + items + bill +
+  // payments) to the bpos schema in the background — see settle() for where
+  // an order is queued, and lib/sync/bill_sync_api.dart for the actual push.
+  // The push itself is entirely silent (no dialog/toast); [billSyncStatus]
+  // below is read by Settings → Settled bills so the state is visible without
+  // interrupting anyone.
+
+  bool _syncingBills = false;
+  String? _cachedOutletId;
+  String? _cachedOutletIdForCode;
+
+  /// Local order id → where its push to Supabase stands. In memory only
+  /// (reloaded from [_db] at startup); kept live so the settled-bills screen
+  /// just rebuilds on [notifyListeners] like everything else in this Store.
+  final Map<int, BillSyncStatus> billSyncStatus = {};
+
+  /// Settled, non-voided orders — what Settings → Settled bills lists,
+  /// newest first.
+  List<Order> get settledBills => history.where((o) => !o.voided).toList()
+    ..sort((a, b) => (b.billedAt ?? b.at).compareTo(a.billedAt ?? a.at));
+
+  Future<void> _loadBillSyncStatus() async {
+    final rows = await _db.select(_db.pendingBillSyncRows).get();
+    billSyncStatus
+      ..clear()
+      ..addEntries(rows.map((r) => MapEntry(r.orderId, _statusOf(r))));
+  }
+
+  BillSyncStatus _statusOf(PendingBillSyncRow r) => BillSyncStatus(
+      switch (r.status) { 'synced' => BillSyncState.synced, 'failed' => BillSyncState.failed, _ => BillSyncState.pending },
+      attempts: r.attempts,
+      lastError: r.lastError);
+
+  Future<void> _setBillSyncStatus(int orderId, String status, int attempts, String? error) async {
+    await _db.into(_db.pendingBillSyncRows).insertOnConflictUpdate(PendingBillSyncRowsCompanion.insert(
+        orderId: Value(orderId), status: Value(status), attempts: Value(attempts), lastError: Value(error)));
+    billSyncStatus[orderId] = _statusOf(PendingBillSyncRow(orderId: orderId, status: status, attempts: attempts, lastError: error));
+    notifyListeners();
+  }
+
+  Future<String> _resolveOutletId() async {
+    if (_cachedOutletId != null && _cachedOutletIdForCode == backofficeOutletCode) return _cachedOutletId!;
+    final id = await SupabaseAuthApi(baseUrl: backofficeUrl, anonKey: backofficeKey).resolveOutletId(backofficeOutletCode);
+    _cachedOutletId = id;
+    _cachedOutletIdForCode = backofficeOutletCode;
+    return id;
+  }
+
+  Order? _historyById(int id) {
+    for (final o in history) {
+      if (o.id == id) return o;
+    }
+    return null;
+  }
+
+  Future<void> _enqueueBillSync(Order o) async {
+    // Only the Main POS pushes to Supabase; a captain mirror's own copy of
+    // this Store never talks to the backoffice directly (CLAUDE.md §21).
+    if (mirror) return;
+    await _setBillSyncStatus(o.id, 'pending', 0, null);
+  }
+
+  /// A bad order (wrong role, no configured payment method, no synced table)
+  /// fails the same way every retry — stop trying it instead of looping.
+  static const _maxBillSyncAttempts = 20;
+
+  /// Resets a failed (or stuck) push back to pending — the retry button on
+  /// the settled-bills screen.
+  void retryBillSync(Order o) {
+    _setBillSyncStatus(o.id, 'pending', 0, null).then((_) {
+      if (isOnline) _syncPendingBills();
+    });
+  }
+
+  Future<void> _syncPendingBills() async {
+    if (_syncingBills || !isOnline) return;
+    final token = sessionAccessToken;
+    if (token == null || token.isEmpty) return; // nobody signed in on this device right now
+    _syncingBills = true;
+    try {
+      final pending = await (_db.select(_db.pendingBillSyncRows)..where((t) => t.status.equals('pending'))).get();
+      if (pending.isEmpty) return;
+
+      String? outletId;
+      Map<String, String>? paymentMethodIds;
+      try {
+        outletId = await _resolveOutletId();
+      } catch (_) {
+        return; // can't reach the backoffice right now; try again next cycle
+      }
+      final api = BillSyncApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: token);
+
+      for (final row in pending) {
+        final o = _historyById(row.orderId);
+        if (o == null) {
+          // Order no longer exists locally (e.g. cleared data) — nothing left to push.
+          await (_db.delete(_db.pendingBillSyncRows)..where((t) => t.orderId.equals(row.orderId))).go();
+          billSyncStatus.remove(row.orderId);
+          continue;
+        }
+        if (o.type != OrderType.dineIn || o.tableId == null) {
+          // No table to anchor a table_session to — takeaway/delivery sync isn't built yet.
+          await _setBillSyncStatus(o.id, 'failed', row.attempts, 'Only dine-in bills sync today (order has no table)');
+          continue;
+        }
+        final tIdx = tables.indexWhere((t) => t.id == o.tableId);
+        final tableRemoteId = tIdx == -1 ? null : tables[tIdx].remoteId;
+        if (tableRemoteId == null) {
+          // Table hasn't been through a menu sync since this feature shipped
+          // (or isn't in the backoffice) — retryable, a menu sync may fix it.
+          await _setBillSyncStatus(o.id, 'pending', row.attempts + 1, 'Table not yet synced from backoffice');
+          continue;
+        }
+        try {
+          paymentMethodIds ??= await api.fetchPaymentMethodIds(outletId);
+          await api.pushSettledOrder(o, outletId: outletId, tableRemoteId: tableRemoteId, paymentMethodIds: paymentMethodIds);
+          await _setBillSyncStatus(o.id, 'synced', row.attempts + 1, null);
+        } catch (e) {
+          final retryable = e is! BillSyncException || e.retryable;
+          final attempts = row.attempts + 1;
+          final message = '$e';
+          await _setBillSyncStatus(o.id, !retryable || attempts >= _maxBillSyncAttempts ? 'failed' : 'pending', attempts, message);
+        }
+      }
+    } finally {
+      _syncingBills = false;
     }
   }
 
@@ -874,21 +1008,17 @@ class Store extends ChangeNotifier {
     try {
       final result =
           await BackofficeApi(baseUrl: backofficeUrl, apiKey: backofficeKey).fetchMenu(outletCode: backofficeOutletCode);
-      int added = 0, updated = 0;
-      final seenIds = <String>{};
-      for (final m in result.items) {
-        seenIds.add(m.id);
-        final i = menu.indexWhere((x) => x.id == m.id);
-        if (i == -1) {
-          menu.add(m);
-          added++;
-        } else if (menu[i] != m) {
-          menu[i] = m;
-          updated++;
-        }
-      }
-      final removed = menu.where((m) => !seenIds.contains(m.id)).length;
-      menu.removeWhere((m) => !seenIds.contains(m.id));
+      // A fresh menu upload fully replaces the live menu rather than patching it in
+      // place, so a reordered/reshuffled upload can't leave stale items or stale
+      // positions behind — counts below are just for the sync toast.
+      final oldById = {for (final m in menu) m.id: m};
+      final newIds = {for (final m in result.items) m.id};
+      final added = newIds.difference(oldById.keys.toSet()).length;
+      final removed = oldById.keys.toSet().difference(newIds).length;
+      final updated = result.items.where((m) => oldById[m.id] != null && oldById[m.id] != m).length;
+      menu
+        ..clear()
+        ..addAll(result.items);
       if (result.categories.isNotEmpty) categories = result.categories;
       kotGroups = result.kotGroups;
       if (result.outlet.name.isNotEmpty) outletName = result.outlet.name;
@@ -907,7 +1037,8 @@ class Store extends ChangeNotifier {
             ..floor = t.floor
             ..seats = t.seats
             ..w = t.w
-            ..h = t.h;
+            ..h = t.h
+            ..remoteId = t.remoteId;
         }
       }
       tables.removeWhere((t) => !seenTableIds.contains(t.id) && t.parties.isEmpty);
@@ -931,6 +1062,15 @@ class Store extends ChangeNotifier {
   // ---------- menu ----------
   MenuItem item(String id) => menu.firstWhere((m) => m.id == id);
   List<MenuItem> itemsIn(String cat) => menu.where((m) => m.cat == cat).toList();
+
+  /// Distinct sub-categories inside [cat], in first-appearance (display) order.
+  List<String> subCatsIn(String cat) {
+    final seen = <String>{};
+    return [
+      for (final m in itemsIn(cat))
+        if (m.subCat.isNotEmpty && seen.add(m.subCat)) m.subCat,
+    ];
+  }
 
   String? offReason(MenuItem m) {
     if (catOff.contains(m.cat)) return 'Category off';
@@ -1032,7 +1172,7 @@ class Store extends ChangeNotifier {
 
   // ---------- orders ----------
   Order draft(OrderType type, {String server = ''}) => Order(id: 0, type: type, server: server);
-  String get nextTaToken => 'TA-${_taSeq + 1}';
+  String get nextTaToken => 'Counter ${_taSeq + 1}';
   int get nextKotNo => _kotSeq + 1;
   String previewBillNo(Order o) => o.billNo ?? 'B${_billSeq + 1}';
 
@@ -1063,7 +1203,7 @@ class Store extends ChangeNotifier {
     if (!orders.contains(o)) {
       o.id = ++_orderSeq;
       if (o.type == OrderType.takeaway) {
-        o.token = 'TA-${++_taSeq}';
+        o.token = 'Counter ${++_taSeq}';
       } else if (o.type == OrderType.delivery) {
         o.token = '#${o.id}';
       }
@@ -1195,6 +1335,11 @@ class Store extends ChangeNotifier {
     if (o.type == OrderType.dineIn) table(o.tableId!).parties.removeWhere((p) => p.orderId == o.id);
     history.add(o);
     notifyListeners();
+    // Local-only and instant — settlement never waits on network. The actual
+    // push happens in the background (see _syncPendingBills).
+    _enqueueBillSync(o).then((_) {
+      if (isOnline) _syncPendingBills();
+    });
   }
 
   // ---------- cancel / edit sent items ----------

@@ -72,7 +72,7 @@ class _PrintLayoutScreenState extends State<PrintLayoutScreen> {
 
   ReceiptData _sample(Store s) {
     final at = DateTime.now();
-    final where = switch (sampleType) { OrderType.dineIn => '12', OrderType.takeaway => 'TA-7', OrderType.delivery => '#1042' };
+    final where = switch (sampleType) { OrderType.dineIn => '12', OrderType.takeaway => 'Counter 7', OrderType.delivery => '#1042' };
     if (kot) {
       final cancel = sampleKot == _SampleKot.cancel, modify = sampleKot == _SampleKot.modify;
       return ReceiptData(

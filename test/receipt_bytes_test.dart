@@ -49,7 +49,7 @@ void main() {
       isKot: false,
       no: 'B12',
       type: OrderType.takeaway,
-      where: 'TA-7',
+      where: 'Counter 7',
       server: '',
       pax: 0,
       at: DateTime(2026, 9, 29),

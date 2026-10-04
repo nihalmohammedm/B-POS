@@ -96,6 +96,21 @@ class SettingsRows extends Table {
   Set<Column> get primaryKey => {key};
 }
 
+/// Settled orders waiting to be pushed to Supabase (background bill sync).
+/// Pure local bookkeeping — this table is never itself synced. Every remote
+/// row the push creates uses an id derived deterministically from [orderId]
+/// (see lib/sync/bill_sync_api.dart), so a retry after a partial failure is
+/// naturally idempotent without needing to record what already landed.
+class PendingBillSyncRows extends Table {
+  IntColumn get orderId => integer()();
+  /// pending | synced | failed
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+  IntColumn get attempts => integer().withDefault(const Constant(0))();
+  TextColumn get lastError => text().nullable()();
+  @override
+  Set<Column> get primaryKey => {orderId};
+}
+
 @DriftDatabase(tables: [
   MenuItemRows,
   CategoryRows,
@@ -108,6 +123,7 @@ class SettingsRows extends Table {
   ItemOffRows,
   CatOffRows,
   SettingsRows,
+  PendingBillSyncRows,
 ])
 class AppDatabase extends _$AppDatabase {
   /// [name] picks the database file: the POS and a captain mirror on the same
@@ -116,5 +132,13 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          if (from < 2) await m.createTable(pendingBillSyncRows);
+        },
+      );
 }

@@ -687,7 +687,7 @@ Future<bool> printReceiptWithToast(BuildContext context, Store s, ReceiptData d)
 
 /// Shows KOT and/or bill. Returns true if Print was tapped and the ticket printed.
 Future<bool> showPrintPreview(BuildContext context,
-    {ReceiptData? kot, ReceiptData? bill, bool billFirst = false, String subtitle = '', String? printLabel, bool canPrint = true}) async {
+    {ReceiptData? kot, ReceiptData? bill, bool billFirst = false, String subtitle = '', String? printLabel, bool canPrint = true, String? skipLabel, VoidCallback? onSkip}) async {
   final s = StoreScope.of(context);
   bool isBill = billFirst || kot == null;
   bool sending = false;
@@ -762,6 +762,13 @@ Future<bool> showPrintPreview(BuildContext context,
                           maxLines: 2,
                           style: ts(13, c: canPrint && printer == null ? C.red : C.muted))),
                   Btn.outline('Close', height: 48, onTap: () => Navigator.pop(ctx, false)),
+                  if (skipLabel != null && onSkip != null) ...[
+                    const SizedBox(width: 10),
+                    Btn.outline(skipLabel, height: 48, onTap: () {
+                      Navigator.pop(ctx, false);
+                      onSkip();
+                    }),
+                  ],
                   if (canPrint) ...[
                     const SizedBox(width: 10),
                   Btn(sending ? 'Sending…' : (printLabel ?? (isBill ? 'Print bill' : 'Print KOT')),

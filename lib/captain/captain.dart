@@ -275,17 +275,17 @@ class _CaptainHomeState extends State<CaptainHome> {
                 const CircleAvatar(radius: 24, backgroundColor: Color(0x38FFFFFF), child: Icon(Icons.add, color: Colors.white)),
                 const SizedBox(width: 14),
                 Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('New takeaway order', style: ts(18, w: w5, c: Colors.white)),
-                  Text('Next token ${s.nextTaToken}', style: ts(13, c: const Color(0xD9FFFFFF))),
+                  Text('New counter sale', style: ts(18, w: w5, c: Colors.white)),
+                  Text('Next up ${s.nextTaToken}', style: ts(13, c: const Color(0xD9FFFFFF))),
                 ]),
               ]),
             ),
           ),
         ),
         const SizedBox(height: 18),
-        const Padding(padding: EdgeInsets.only(left: 4, bottom: 8), child: Label('Running takeaways')),
+        const Padding(padding: EdgeInsets.only(left: 4, bottom: 8), child: Label('Running counter sales')),
         if (ta.isEmpty)
-          Padding(padding: const EdgeInsets.all(24), child: Text('No running takeaways', textAlign: TextAlign.center, style: ts(14, c: C.muted))),
+          Padding(padding: const EdgeInsets.all(24), child: Text('No running counter sales', textAlign: TextAlign.center, style: ts(14, c: C.muted))),
         for (final o in ta) _taRow(s, o),
       ]);
 
@@ -341,74 +341,66 @@ class _CaptainHomeState extends State<CaptainHome> {
               final s = StoreScope.of(ctx);
               pax = math.max(1, math.min(pax, math.max(1, t.free)));
               final left = t.free - pax;
-              final seats = <Widget>[];
+              final segColors = <Color>[];
               for (var i = 0; i < t.parties.length; i++) {
                 final p = t.parties[i];
-                final c = s.orderOfParty(t, p)?.billed == true ? C.amber : partyColors[i % partyColors.length];
+                final billed = s.orderOfParty(t, p)?.billed == true;
                 for (var j = 0; j < p.pax; j++) {
-                  seats.add(_seat(c, p.key, Colors.white, null));
+                  segColors.add(billed ? C.amber : partyColors[i % partyColors.length]);
                 }
               }
               for (var j = 0; j < t.free; j++) {
-                seats.add(j < pax
-                    ? _seat(partyColors[t.parties.length % partyColors.length], 'new', Colors.white, null)
-                    : _seat(Colors.white, '', C.muted, C.faint));
+                segColors.add(j < pax ? C.ink : C.faint);
               }
               return SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Text(t.parties.isEmpty ? 'Seat guests · ${t.id}' : 'Table ${t.id} · shared', style: ts(20, w: w5)),
+                  Text('Table ${t.id}', style: ts(20, w: w5)),
                   const SizedBox(height: 2),
                   Text(
                       t.parties.isEmpty
-                          ? '${t.seats} seats${t.reservedFor != null ? ' · reserved ${t.reservedFor}' : ''}'
-                          : '${t.used} of ${t.seats} seats taken · ${t.free} free',
+                          ? '${t.seats} seats · all free${t.reservedFor != null ? ' · reserved ${t.reservedFor}' : ''}'
+                          : '${t.seats} seats · ${t.used} taken · ${t.free} free',
                       style: ts(14, c: C.muted)),
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: const Color(0xFFF6F6F6), borderRadius: BorderRadius.circular(20), border: Border.all(color: C.faint)),
-                    child: GridView.count(
-                      crossAxisCount: math.min(t.seats, 6),
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 6,
-                      crossAxisSpacing: 6,
-                      childAspectRatio: 1.3,
-                      children: seats,
-                    ),
-                  ),
                   if (t.parties.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    const Label('Seated'),
+                    const SizedBox(height: 18),
+                    const Label('Already at this table · tap to open'),
                     const SizedBox(height: 8),
                     for (var i = 0; i < t.parties.length; i++) _partyRow(ctx, s, t, t.parties[i], i),
                   ],
                   if (t.free > 0) ...[
-                    const SizedBox(height: 16),
-                    Label(t.parties.isEmpty ? 'How many people?' : 'Seat another party'),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 18),
+                    Text(t.parties.isEmpty ? 'How many guests?' : 'New guests — how many?', style: ts(17, w: w6)),
+                    const SizedBox(height: 12),
                     GridView.count(
-                      crossAxisCount: 4,
+                      crossAxisCount: math.max(1, math.min(t.free, 4)),
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 8,
-                      crossAxisSpacing: 8,
-                      childAspectRatio: 1.5,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 1.15,
                       children: [for (var n = 1; n <= t.free; n++) Choice('$n', on: n == pax, fontSize: 20, onTap: () => set(() => pax = n))],
                     ),
                     const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: C.skyTint, borderRadius: BorderRadius.circular(12)),
-                      child: Text(
-                          left == 0
-                              ? (t.parties.isEmpty ? 'Whole table for this party' : 'Table will be full')
-                              : '$left seat${left == 1 ? '' : 's'} stay open to share · up to ${t.parties.length + 1 + left} parties',
-                          style: ts(13, c: C.skyInk)),
-                    ),
-                    const SizedBox(height: 14),
-                    Btn('Start order · $pax pax', expand: true, height: 56, fontSize: 16, onTap: () async {
+                    Row(
+                        children: [
+                      for (var i = 0; i < segColors.length; i++)
+                        Expanded(
+                          child: Container(
+                            height: 5,
+                            margin: EdgeInsets.only(right: i == segColors.length - 1 ? 0 : 4),
+                            decoration: BoxDecoration(color: segColors[i], borderRadius: BorderRadius.circular(999)),
+                          ),
+                        ),
+                    ]),
+                    const SizedBox(height: 8),
+                    Text(
+                        left == 0
+                            ? (t.parties.isEmpty ? 'Whole table for this party' : 'Table will be full')
+                            : '$left seat${left == 1 ? '' : 's'} stay${left == 1 ? 's' : ''} free for another group',
+                        style: ts(13, c: C.muted)),
+                    const SizedBox(height: 16),
+                    Btn('Seat $pax guest${pax == 1 ? '' : 's'} & take order', expand: true, height: 56, fontSize: 16, onTap: () async {
                       Navigator.pop(ctx);
                       final key = await _act((a) => a.seat(t, pax));
                       if (key != null && mounted) openParty(t, key);
@@ -422,13 +414,6 @@ class _CaptainHomeState extends State<CaptainHome> {
             }));
   }
 
-  Widget _seat(Color c, String t, Color fg, Color? border) => Container(
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-            color: c, borderRadius: BorderRadius.circular(12), border: border == null ? null : Border.all(color: border, width: 1.5)),
-        child: Text(t, style: ts(13, w: w6, c: fg)),
-      );
-
   Widget _partyRow(BuildContext ctx, Store s, TableModel t, Party p, int i) {
     final o = s.orderOfParty(t, p);
     final billed = o?.billed == true;
@@ -437,16 +422,16 @@ class _CaptainHomeState extends State<CaptainHome> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
           onTap: () {
             Navigator.pop(ctx);
             openParty(t, p.key);
           },
           child: Container(
-            padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), border: Border.all(color: C.line)),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: C.line)),
             child: Row(children: [
               Dot(color: billed ? C.amber : partyColors[i % partyColors.length], size: 10),
               const SizedBox(width: 12),
@@ -456,15 +441,9 @@ class _CaptainHomeState extends State<CaptainHome> {
                 Text('${p.pax} pax · ${billed ? 'Bill printed' : elapsed(p.seatedAt)}${hasItems ? ' · ${inr(o.total)}' : ''}',
                     style: ts(13, c: C.muted)),
               ])),
-              if (!hasItems)
+              if (!hasItems && !billed)
                 TextButton(onPressed: () => _act((a) => a.freeParty(t, p)), child: const Text('Free')),
-              Container(
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(color: billed ? C.amber : C.ink, borderRadius: BorderRadius.circular(12)),
-                child: Text(billed ? 'Billing' : 'Open', style: ts(14, w: w5, c: Colors.white)),
-              ),
+              const Icon(Icons.chevron_right, color: C.faint),
             ]),
           ),
         ),
@@ -571,6 +550,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
   /// Items shown under "Popular" when they exist on this menu.
   static const popular = ['g1', 'm1', 'p1', 'v2', 'b1', 's2', 'v1', 'd1'];
   String cat = 'Popular';
+  String? subCat;
   final cart = <OrderLine>[];
   bool sentOpen = false;
   bool sending = false;
@@ -625,7 +605,10 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
   List<MenuItem> search(Store s) {
     final x = q;
     if (x.isEmpty) {
-      if (cat != 'Popular') return s.itemsIn(cat);
+      if (cat != 'Popular') {
+        final all = s.itemsIn(cat);
+        return subCat == null ? all : all.where((m) => m.subCat == subCat).toList();
+      }
       final pop = [for (final id in popular) ...s.menu.where((m) => m.id == id)];
       return pop.isNotEmpty ? pop : s.menu.take(24).toList();
     }
@@ -784,7 +767,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
     }
     final t = isTA ? null : s.table(o.tableId!);
     final p = isTA ? null : s.party(o.tableId!, o.partyKey!);
-    final title = isTA ? (o.token.isEmpty ? 'New takeaway · ${s.nextTaToken}' : 'Takeaway ${o.token}') : 'Table ${s.labelOf(o)}';
+    final title = isTA ? (o.token.isEmpty ? 'New ${s.nextTaToken}' : o.token) : 'Table ${s.labelOf(o)}';
     final sub = isTA
         ? (o.lines.isEmpty ? 'New order' : '${elapsed(o.at)} · Running · ${inr(o.total)}')
         : '${t!.parties.length > 1 || t.free > 0 ? 'Shared · ${t.free} free' : '${t.seats} seats'} · ${o.lines.isEmpty ? 'New order' : 'Running · ${inr(o.total)}'}';
@@ -874,7 +857,10 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                               borderRadius: BorderRadius.circular(999),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(999),
-                                onTap: () => setState(() => cat = c),
+                                onTap: () => setState(() {
+                                  cat = c;
+                                  subCat = null;
+                                }),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 14),
                                   decoration: BoxDecoration(
@@ -890,6 +876,34 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                           ),
                       ]),
                     ),
+                    if (cat != 'Popular' && s.subCatsIn(cat).isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 34,
+                        child: ListView(scrollDirection: Axis.horizontal, children: [
+                          for (final sc in s.subCatsIn(cat))
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: Material(
+                                color: subCat == sc ? C.ink : Colors.white,
+                                borderRadius: BorderRadius.circular(999),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(999),
+                                  onTap: () => setState(() => subCat = subCat == sc ? null : sc),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(999),
+                                        border: Border.all(color: subCat == sc ? C.ink : C.line)),
+                                    child: Text(sc, style: ts(13, w: w5, c: subCat == sc ? Colors.white : C.ink2)),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ]),
+                      ),
+                    ],
                   ],
                 ]),
               ),
@@ -898,7 +912,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                   if (!hasQ && o.lines.isNotEmpty) _sentCard(),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                    child: Label(hasQ ? '${res.length} match${res.length == 1 ? '' : 'es'} · enter adds top result' : cat),
+                    child: Label(hasQ ? '${res.length} match${res.length == 1 ? '' : 'es'} · enter adds top result' : (subCat ?? cat)),
                   ),
                   for (var i = 0; i < res.length; i++) _resultRow(s, res[i], qtyBy[res[i].id] ?? 0, hasQ && i == 0),
                   if (hasQ && res.isEmpty)

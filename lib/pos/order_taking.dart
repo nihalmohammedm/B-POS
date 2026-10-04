@@ -12,16 +12,21 @@ import 'payment.dart';
 class OrderTakingScreen extends StatefulWidget {
   final Order? target;
   final VoidCallback? onDone;
-  const OrderTakingScreen({super.key, this.target, this.onDone});
+  /// Which order type to open on when there's no [target] to resume — e.g.
+  /// jumping straight into a takeaway sale from "Fast billing" instead of
+  /// landing on dine-in and having to switch.
+  final OrderType startType;
+  const OrderTakingScreen({super.key, this.target, this.onDone, this.startType = OrderType.dineIn});
   @override
   State<OrderTakingScreen> createState() => _OrderTakingState();
 }
 
 class _OrderTakingState extends State<OrderTakingScreen> {
   String? cat;
+  String? subCat;
   String query = '';
   bool vegOnly = false;
-  OrderType type = OrderType.dineIn;
+  late OrderType type = widget.startType;
   String? tableId, partyKey;
   bool tableError = false;
   Order? existing;
@@ -53,6 +58,18 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         phoneC.text = t.phone;
         addrC.text = t.address;
       }
+    }
+  }
+
+  /// Most delivery orders come through Swiggy, so switching to Delivery
+  /// prefills the required name/address fields with it instead of leaving
+  /// staff to type it every time — still editable for the rare non-Swiggy order.
+  void _switchType(OrderType t) {
+    type = t;
+    existing = null;
+    if (t == OrderType.delivery) {
+      if (nameC.text.trim().isEmpty) nameC.text = 'Swiggy';
+      if (addrC.text.trim().isEmpty) addrC.text = 'Swiggy';
     }
   }
 
@@ -198,10 +215,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
 
   // ---------------- keyboard ----------------
   List<Hotkey> _keys(Store s) {
-    void setType(OrderType t) => setState(() {
-          type = t;
-          existing = null;
-        });
+    void setType(OrderType t) => setState(() => _switchType(t));
     void bump(int d) {
       if (cart.isEmpty) return;
       setState(() {
@@ -214,7 +228,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     void stepCat(int d) {
       final all = <String?>[null, ...s.categories];
       final i = all.indexOf(cat);
-      setState(() => cat = all[(i + d) % all.length]);
+      setState(() {
+        cat = all[(i + d) % all.length];
+        subCat = null;
+      });
     }
 
     Future<void> clearCart() async {
@@ -251,6 +268,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     return s.menu
         .where((m) =>
             (cat == null || m.cat == cat) &&
+            (subCat == null || m.subCat == subCat) &&
             (!vegOnly || m.veg) &&
             (q.isEmpty || m.name.toLowerCase().contains(q) || m.code.startsWith(q)))
         .toList();
@@ -332,11 +350,24 @@ class _OrderTakingState extends State<OrderTakingScreen> {
             maxCrossAxisExtent: 200, mainAxisExtent: 104, crossAxisSpacing: 12, mainAxisSpacing: 12),
         delegate: SliverChildListDelegate([_catTile(s, null), for (final c in s.categories) _catTile(s, c)]),
       ),
+      if (cat != null && s.subCatsIn(cat!).isNotEmpty)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
+            child: SizedBox(
+              height: 34,
+              child: ListView(scrollDirection: Axis.horizontal, children: [
+                _subCatTab('All', subCat == null, () => setState(() => subCat = null)),
+                for (final sc in s.subCatsIn(cat!)) _subCatTab(sc, subCat == sc, () => setState(() => subCat = sc)),
+              ]),
+            ),
+          ),
+        ),
       SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(4, 22, 4, 12),
           child: Row(children: [
-            Text(cat ?? 'All items', style: ts(18, w: w5)),
+            Text(subCat ?? cat ?? 'All items', style: ts(18, w: w5)),
             const SizedBox(width: 8),
             Text('${items.length}', style: ts(14, c: C.muted)),
           ]),
@@ -365,7 +396,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: () => setState(() => cat = on ? null : c),
+        onTap: () => setState(() {
+          cat = on ? null : c;
+          subCat = null;
+        }),
         onLongPress: c == null ? null : () => showCategoryManage(context, c, onAdd: add),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -394,6 +428,20 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       ),
     );
   }
+
+  // Plain text tab, not a bordered pill — subcategories read as a list under
+  // their parent category, not as another row of category-style cards.
+  Widget _subCatTab(String label, bool on, VoidCallback onTap) => Padding(
+        padding: const EdgeInsets.only(right: 22),
+        child: InkWell(
+          onTap: onTap,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: ts(14, w: on ? w6 : w5, c: on ? C.ink : C.muted)),
+            const SizedBox(height: 6),
+            Container(height: 2, width: 18, color: on ? C.ink : Colors.transparent),
+          ]),
+        ),
+      );
 
   Widget _itemCard(Store s, MenuItem m, int qty) {
     final reason = s.offReason(m);
@@ -527,10 +575,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
               expand: true,
               items: const [(OrderType.dineIn, 'Dine in'), (OrderType.takeaway, 'Takeaway'), (OrderType.delivery, 'Delivery')],
               value: type,
-              onChanged: (v) => setState(() {
-                type = v;
-                existing = null;
-              }),
+              onChanged: (v) => setState(() => _switchType(v)),
             ),
             const SizedBox(height: 14),
             _typeFields(s),

@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../link/captain_link.dart';
 import '../link/link_models.dart';
 import '../theme.dart';
+import '../updater.dart';
 import '../widgets/common.dart';
 import 'captain.dart';
 
@@ -236,6 +237,13 @@ class _PairScreenState extends State<PairScreen> {
                 if (busy) ...[
                   const SizedBox(height: 14),
                   const Center(child: CircularProgressIndicator()),
+                ],
+                if (Updater.supported) ...[
+                  const SizedBox(height: 10),
+                  TextButton.icon(
+                      onPressed: () => showUpdateSheet(context),
+                      icon: const Icon(Icons.system_update, size: 18),
+                      label: const Text('Check for app update')),
                 ],
                 if (error != null) ...[
                   const SizedBox(height: 14),

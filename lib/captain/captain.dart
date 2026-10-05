@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
+import '../updater.dart';
 import '../widgets/common.dart';
 import '../widgets/receipt.dart';
 import '../link/captain_link.dart';
@@ -111,6 +112,10 @@ class _CaptainHomeState extends State<CaptainHome> {
                     bg: Colors.white, border: C.line, size: 13, leading: const Dot(color: C.sky, size: 7),
                     pad: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
                 const SizedBox(width: 6),
+                if (Updater.supported) ...[
+                  RoundIcon(Icons.system_update, size: 40, tooltip: 'App update', onTap: () => showUpdateSheet(context)),
+                  const SizedBox(width: 6),
+                ],
                 if (CaptainLinkScope.maybeOf(context) case final link?)
                   RoundIcon(link.online ? Icons.wifi : Icons.wifi_off,
                       size: 40, fg: link.online ? C.greenInk : C.redInk, tooltip: 'Connection to the POS', onTap: () => showConnectionSheet(context))

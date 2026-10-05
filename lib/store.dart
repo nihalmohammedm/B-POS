@@ -606,12 +606,12 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// KOTs a kitchen display marked served, for the counter; newest last.
+  /// KOTs a kitchen display marked ready, for the counter; newest last.
   final List<ServedNotice> servedNotices = [];
 
-  /// A kitchen display bumped [k]: tell the counter. One notice per KOT, so a
-  /// recall and re-bump doesn't stack a second one.
-  void kitchenServed(Kot k, String station) {
+  /// A kitchen display marked [k] ready: tell the counter. One notice per KOT,
+  /// so a recall and re-ready doesn't stack a second one.
+  void kitchenReady(Kot k, String station) {
     final o = orderById(k.orderId);
     if (o == null) return;
     servedNotices.removeWhere((n) => n.kotNo == k.no);
@@ -629,6 +629,14 @@ class Store extends ChangeNotifier {
         handedOver: o.type != OrderType.dineIn,
         at: DateTime.now()));
     notifyListeners();
+  }
+
+  /// [k] left the ready state (served or recalled): its notice is stale.
+  void clearReadyNotice(Kot k) {
+    if (servedNotices.any((n) => n.kotNo == k.no)) {
+      servedNotices.removeWhere((n) => n.kotNo == k.no);
+      notifyListeners();
+    }
   }
 
   void dismissServed(String id) {

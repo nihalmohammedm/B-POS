@@ -104,15 +104,18 @@ void main() {
     await kitLink.call('kdsToggle', {'kot': grill.no, 'line': 0});
     expect(pos.kotByNo(grill.no)!.stage, KotStage.ready);
     await until(() => kit.kotByNo(grill.no)?.stage == KotStage.ready, 'ready mirrored');
+    final n = pos.servedNotices.single;
+    expect((n.station, n.kotNo, n.items), ('Grill', grill.no, '1× Alfaham'), reason: 'marking ready notifies the POS');
     await kitLink.call('kdsRecall', {'kot': grill.no});
+    expect(pos.servedNotices, isEmpty, reason: 'recalled: no longer ready');
     await kitLink.call('kdsReady', {'kot': grill.no});
+    await kitLink.call('kdsReady', {'kot': grill.no});
+    expect(pos.servedNotices, hasLength(1), reason: 'a re-ready replaces its notice, not stacks');
     await kitLink.call('kdsBump', {'kot': grill.no});
     await until(() => kit.kotByNo(grill.no) == null, 'served ticket leaves the display');
-    final n = pos.servedNotices.single;
-    expect((n.station, n.kotNo, n.items, n.handedOver), ('Grill', grill.no, '1× Alfaham', false));
+    expect(pos.servedNotices, isEmpty, reason: 'served: notice cleared');
     await kitLink.call('kdsRecall', {'kot': grill.no});
-    await kitLink.call('kdsBump', {'kot': grill.no});
-    expect(pos.servedNotices, hasLength(1), reason: 'a re-bump replaces its notice, not stacks');
+    await kitLink.call('kdsReady', {'kot': grill.no});
     pos.dismissServed(pos.servedNotices.single.id);
     expect(pos.servedNotices, isEmpty);
 

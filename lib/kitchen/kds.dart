@@ -11,6 +11,7 @@ import '../link/captain_link.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
+import '../updater.dart';
 import '../widgets/common.dart';
 import 'bell.dart';
 
@@ -164,6 +165,7 @@ class _KdsScreenState extends State<KdsScreen> {
       backgroundColor: C.bg,
       body: SafeArea(
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const AutoUpdateBanner(),
           if (!link.online) _offline(link),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 10, 8),
@@ -188,6 +190,10 @@ class _KdsScreenState extends State<KdsScreen> {
                         if (prefs.sound) bell.ring();
                       })),
               const SizedBox(width: 8),
+              if (Updater.supported) ...[
+                RoundIcon(Icons.system_update, tooltip: 'App update', onTap: () => showUpdateSheet(context)),
+                const SizedBox(width: 8),
+              ],
               RoundIcon(Icons.tune, tooltip: 'Sections & settings', onTap: () => _settings(context)),
             ]),
           ),

@@ -281,15 +281,18 @@ class PosHost {
         s.startKot(k);
       case 'kdsReady':
         s.readyKot(k);
+        s.kitchenReady(k, d.name);
       case 'kdsBump':
         s.bumpKot(k);
-        s.kitchenServed(k, d.name);
+        s.clearReadyNotice(k);
       case 'kdsRecall':
         s.recallKot(k);
+        s.clearReadyNotice(k);
       case 'kdsToggle':
         final i = (a['line'] as num?)?.toInt() ?? -1;
         if (i < 0 || i >= k.lines.length) throw LinkRefused('That item is no longer on KOT #$no');
         s.toggleLine(k.lines[i]);
+        k.stage == KotStage.ready ? s.kitchenReady(k, d.name) : s.clearReadyNotice(k);
       default:
         throw LinkRefused('Unknown request "$name" · update the kitchen app');
     }

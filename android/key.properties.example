@@ -1,0 +1,4 @@
+storeFile=/Users/nihalmohammed/bpos-release.jks
+storePassword=YOUR_PASSWORD
+keyAlias=bpos
+keyPassword=YOUR_PASSWORD

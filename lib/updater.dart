@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -201,6 +202,99 @@ class _UpdatePanelState extends State<UpdatePanel> {
           ]),
         ],
       ]),
+    );
+  }
+}
+
+/// Bottom sheet wrapping [UpdatePanel] for the Captain and Kitchen apps, which have no settings screen.
+Future<void> showUpdateSheet(BuildContext context) => showSheet(
+      context,
+      (_) => const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 16), child: UpdatePanel()),
+    );
+
+/// Checks for a new release at launch and every few hours, and shows a slim bar when one is
+/// available. Android can't install silently, so the bar downloads the APK on tap and hands it to
+/// the system installer (one confirm tap). Used by the kitchen display, which has no settings screen.
+class AutoUpdateBanner extends StatefulWidget {
+  const AutoUpdateBanner({super.key});
+  @override
+  State<AutoUpdateBanner> createState() => _AutoUpdateBannerState();
+}
+
+class _AutoUpdateBannerState extends State<AutoUpdateBanner> {
+  static const _every = Duration(hours: 6);
+  Timer? _first, _timer;
+  UpdateInfo? _update;
+  double? _progress;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!Updater.supported) return;
+    _first = Timer(const Duration(seconds: 8), _check);
+    _timer = Timer.periodic(_every, (_) => _check());
+  }
+
+  @override
+  void dispose() {
+    _first?.cancel();
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _check() async {
+    if (_progress != null) return;
+    try {
+      final u = await Updater.check(await Updater.appInfo());
+      if (mounted) setState(() { _update = u; _error = null; });
+    } catch (_) {
+      // Offline or no release yet: stay quiet, try again next cycle.
+    }
+  }
+
+  Future<void> _install() async {
+    final u = _update!;
+    try {
+      if (!await Updater.canInstall()) {
+        if (mounted) toast(context, 'Allow “Install unknown apps” for BPOS Kitchen, then tap the bar again');
+        await Updater.openInstallSettings();
+        return;
+      }
+      setState(() { _progress = 0; _error = null; });
+      await Updater.install(await Updater.download(u, (p) { if (mounted) setState(() => _progress = p); }));
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Update failed · tap to retry');
+    } finally {
+      if (mounted) setState(() => _progress = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = _update;
+    if (u == null) return const SizedBox.shrink();
+    return Material(
+      color: C.blue,
+      child: InkWell(
+        onTap: _progress != null ? null : _install,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(children: [
+            const Icon(Icons.system_update, size: 18, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _progress != null
+                    ? 'Downloading update ${(_progress! * 100).round()}%'
+                    : _error ?? 'Update ${u.versionName} available · tap to install',
+                style: ts(14, w: w5, c: Colors.white),
+              ),
+            ),
+            if (_progress != null) SizedBox(width: 90, child: LinearProgressIndicator(value: _progress, minHeight: 5)),
+          ]),
+        ),
+      ),
     );
   }
 }

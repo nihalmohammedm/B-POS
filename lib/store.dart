@@ -415,14 +415,16 @@ class Store extends ChangeNotifier {
           billSyncStatus.remove(row.orderId);
           continue;
         }
-        if (o.type != OrderType.dineIn || o.tableId == null) {
-          // No table to anchor a table_session to — takeaway/delivery sync isn't built yet.
-          await _setBillSyncStatus(o.id, 'failed', row.attempts, 'Only dine-in bills sync today (order has no table)');
-          continue;
+        String? tableRemoteId;
+        if (o.type == OrderType.dineIn) {
+          if (o.tableId == null) {
+            await _setBillSyncStatus(o.id, 'failed', row.attempts, 'Dine-in order has no table');
+            continue;
+          }
+          final tIdx = tables.indexWhere((t) => t.id == o.tableId);
+          tableRemoteId = tIdx == -1 ? null : tables[tIdx].remoteId;
         }
-        final tIdx = tables.indexWhere((t) => t.id == o.tableId);
-        final tableRemoteId = tIdx == -1 ? null : tables[tIdx].remoteId;
-        if (tableRemoteId == null) {
+        if (o.type == OrderType.dineIn && tableRemoteId == null) {
           // Table hasn't been through a menu sync since this feature shipped
           // (or isn't in the backoffice) — retryable, a menu sync may fix it.
           await _setBillSyncStatus(o.id, 'pending', row.attempts + 1, 'Table not yet synced from backoffice');
@@ -1325,11 +1327,47 @@ class Store extends ChangeNotifier {
     return no;
   }
 
+  /// Applies a discount to [o] before it's settled — reduces the amount due
+  /// (and, since tax is computed after discount, the tax too). [amount] is
+  /// already resolved to a flat ₹ figure regardless of how staff entered it
+  /// (fixed or % of subtotal); clamped so it can never exceed the subtotal.
+  /// Gate the call site on `s.can('discount.apply')`.
+  void setDiscount(Order o, {required double amount, required String reason}) {
+    o.discountAmount = amount.clamp(0, o.subtotal);
+    o.discountReason = reason;
+    notifyListeners();
+  }
+
+  void clearDiscount(Order o) {
+    o.discountAmount = 0;
+    o.discountReason = null;
+    notifyListeners();
+  }
+
   void settle(Order o, {List<Payment> payments = const []}) {
     billRequests.removeWhere((r) => r.orderId == o.id);
     servedNotices.removeWhere((n) => n.orderId == o.id); // order closed: nothing left to act on
     assignBillNo(o);
     o.payments.addAll(payments);
+    _archive(o);
+  }
+
+  /// Settles [o] with nothing charged — explicitly flagged as complimentary,
+  /// never just a normal bill with the amount zeroed (CLAUDE.md §18). Gate
+  /// the call site on `s.can('discount.apply')`.
+  void settleComplimentary(Order o, {required String reason, String by = ''}) {
+    billRequests.removeWhere((r) => r.orderId == o.id);
+    servedNotices.removeWhere((n) => n.orderId == o.id);
+    assignBillNo(o);
+    o.complimentary = true;
+    o.complimentaryReason = reason;
+    o.payNote = 'Complimentary · $reason';
+    _archive(o);
+  }
+
+  /// Shared tail of [settle]/[settleComplimentary]: close the order out of
+  /// the active lists, archive it, and queue the background Supabase push.
+  void _archive(Order o) {
     orders.remove(o);
     kots.removeWhere((k) => k.orderId == o.id);
     if (o.type == OrderType.dineIn) table(o.tableId!).parties.removeWhere((p) => p.orderId == o.id);
@@ -1342,12 +1380,37 @@ class Store extends ChangeNotifier {
     });
   }
 
+  /// Refunds [amount] from payment [paymentIndex] on an already-settled [o].
+  /// The original [Payment] is never edited — this is its own auditable
+  /// record (CLAUDE.md §19/§29), re-pushed to Supabase as a new
+  /// `payment_refunds` row. Gate the call site on `s.can('payment.refund')`.
+  /// Returns false (nothing changed) if [amount] isn't valid for that payment.
+  bool refundPayment(Order o, int paymentIndex, double amount, String reason, {String by = ''}) {
+    if (paymentIndex < 0 || paymentIndex >= o.payments.length) return false;
+    final p = o.payments[paymentIndex];
+    final alreadyRefunded =
+        o.refunds.where((r) => r.paymentIndex == paymentIndex).fold<double>(0, (a, r) => a + r.amount);
+    if (amount <= 0 || amount > p.amount - alreadyRefunded + 0.005) return false;
+    o.refunds.add(Refund(paymentIndex: paymentIndex, amount: amount, reason: reason, by: by, at: DateTime.now()));
+    notifyListeners();
+    // pushSettledOrder is idempotent (deterministic ids, upsert) — re-queuing
+    // the already-synced order for another pass re-upserts bills with the
+    // corrected total and pushes the new payment_refunds row. No separate
+    // sync mechanism needed for a refund.
+    _setBillSyncStatus(o.id, 'pending', 0, null).then((_) {
+      if (isOnline) _syncPendingBills();
+    });
+    return true;
+  }
+
   // ---------- cancel / edit sent items ----------
   // Every change to an item the kitchen already has produces a KOT to print:
   // a cancellation KOT for removed units, a modified KOT when an item is swapped
   // for a different size/add-ons/note, or a normal KOT for extra units.
 
   List<String> cancelReasons = [...defaultCancelReasons];
+  List<String> complimentaryReasons = [...defaultComplimentaryReasons];
+  List<String> discountReasons = [...defaultDiscountReasons];
 
   /// Items can't change once the bill is printed; reopen it first.
   bool canAmend(Order o) => !o.billed && orders.contains(o);
@@ -1414,7 +1477,15 @@ class Store extends ChangeNotifier {
           ..qty = n
           ..cancelledQty = 0);
         o.cancellations.add(ItemCancellation(
-            itemName: l.item.name, optText: l.optText, qty: n, unitPrice: l.unit, reason: reason, by: by, kotNo: k.no, at: at));
+            itemName: l.item.name,
+            optText: l.optText,
+            qty: n,
+            unitPrice: l.unit,
+            reason: reason,
+            by: by,
+            kotNo: k.no,
+            at: at,
+            lineIndex: o.lines.indexOf(l)));
         // Nothing cooked yet, so tracked portions go back into stock.
         final st = stock[l.item.id];
         if (st != null && l.state == LineState.queued) stock[l.item.id] = st + n;

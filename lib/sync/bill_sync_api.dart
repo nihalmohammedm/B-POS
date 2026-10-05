@@ -104,48 +104,73 @@ class BillSyncApi {
   Future<void> pushSettledOrder(
     Order o, {
     required String outletId,
-    required String tableRemoteId,
+    String? tableRemoteId,
     required Map<String, String> paymentMethodIds,
   }) async {
     final now = DateTime.now().toUtc().toIso8601String();
     final seed = 'bpos-order-${o.id}';
-    final tableSessionId = _deterministicUuid('$seed:table_session');
-    final partyId = _deterministicUuid('$seed:party');
+    // Takeaway/delivery have no table, so no table session or party either.
+    final hasTable = o.type == OrderType.dineIn;
+    if (hasTable && tableRemoteId == null) {
+      throw BillSyncException('Dine-in order has no synced table', statusCode: 422);
+    }
+    final tableSessionId = hasTable ? _deterministicUuid('$seed:table_session') : null;
+    final partyId = hasTable ? _deterministicUuid('$seed:party') : null;
     final orderId = _deterministicUuid('$seed:order');
     final billId = _deterministicUuid('$seed:bill');
 
-    await _post('table_sessions', {
-      'id': tableSessionId,
-      'outlet_id': outletId,
-      'table_id': tableRemoteId,
-      'status': 'closed',
-      'opened_at': o.at.toUtc().toIso8601String(),
-      'closed_at': now,
-    });
+    if (hasTable) {
+      await _post('table_sessions', {
+        'id': tableSessionId,
+        'outlet_id': outletId,
+        'table_id': tableRemoteId,
+        'status': 'closed',
+        'opened_at': o.at.toUtc().toIso8601String(),
+        'closed_at': now,
+      });
 
-    await _post('parties', {
-      'id': partyId,
-      'outlet_id': outletId,
-      'table_session_id': tableSessionId,
-      'party_number': o.id,
-      'guest_count': o.pax,
-      'status': 'closed',
-      'closed_at': now,
-    });
+      await _post('parties', {
+        'id': partyId,
+        'outlet_id': outletId,
+        'table_session_id': tableSessionId,
+        'party_number': o.id,
+        'guest_count': o.pax < 1 ? 1 : o.pax,
+        'status': 'closed',
+        'closed_at': now,
+      });
+    }
 
     await _post('orders', {
       'id': orderId,
       'outlet_id': outletId,
       'table_session_id': tableSessionId,
       'party_id': partyId,
+      'order_type': switch (o.type) {
+        OrderType.dineIn => 'dine_in',
+        OrderType.takeaway => 'takeaway',
+        OrderType.delivery => 'delivery',
+      },
+      if (o.customer.isNotEmpty) 'customer_name': o.customer,
+      if (o.phone.isNotEmpty) 'customer_phone': o.phone,
+      if (o.address.isNotEmpty) 'delivery_address': o.address,
+      if (o.token.isNotEmpty) 'token_number': o.token,
       'order_number': o.id,
-      'status': 'settled',
+      // orders_status_check allows: open, submitted, preparing, ready,
+      // served, completed, cancelled — 'completed' is the terminal state
+      // for a fully settled, paid order.
+      'status': 'completed',
       'created_at': o.at.toUtc().toIso8601String(),
     });
 
-    final liveLines = o.liveLines;
-    for (var i = 0; i < liveLines.length; i++) {
-      final l = liveLines[i];
+    // Every line ever sent, including fully-cancelled ones — order_items.quantity
+    // is the ORIGINAL ordered amount, never overwritten by a later cancellation
+    // (CLAUDE.md §12: "Ordered = 4, Cancelled = 1, Remaining = 3 — do not simply
+    // overwrite the original order quantity"). What was cancelled goes to
+    // order_item_cancellations below instead. Index into the full [o.lines] is
+    // each line's stable identity for this push (see [ItemCancellation.lineIndex]
+    // and the bill_items loop further down, which both derive the same id).
+    for (var i = 0; i < o.lines.length; i++) {
+      final l = o.lines[i];
       await _post('order_items', {
         'id': _deterministicUuid('$seed:order_item:$i'),
         'order_id': orderId,
@@ -157,33 +182,62 @@ class BillSyncApi {
         'product_name_snapshot': l.item.name,
         'variant_name_snapshot': l.variant,
         'unit_price': l.unitPrice,
-        'quantity': l.activeQty,
-        'line_total': l.total,
-        'status': 'active',
+        'quantity': l.qty,
+        'line_total': l.unitPrice * l.qty,
+        'status': l.activeQty <= 0 ? 'cancelled' : 'active',
       });
     }
 
+    for (var i = 0; i < o.cancellations.length; i++) {
+      final c = o.cancellations[i];
+      if (c.lineIndex < 0 || c.lineIndex >= o.lines.length) continue; // pre-feature record, nothing to link to
+      await _post('order_item_cancellations', {
+        'id': _deterministicUuid('$seed:order_item_cancellation:$i'),
+        'order_item_id': _deterministicUuid('$seed:order_item:${c.lineIndex}'),
+        'quantity': c.qty,
+        'reason_snapshot': c.reason,
+        'created_at': c.at.toUtc().toIso8601String(),
+      });
+    }
+
+    // bills_status_check allows: open, partially_paid, paid, cancelled, refunded.
+    // There's no "partially_refunded" bill status, so a partial refund has
+    // nowhere better to land than staying 'paid' — only a full refund moves
+    // the bill to 'refunded'.
+    final fullyRefunded = o.refunds.isNotEmpty && o.refunded >= o.paid - 0.005;
     await _post('bills', {
       'id': billId,
       'outlet_id': outletId,
       'table_session_id': tableSessionId,
       'party_id': partyId,
       'bill_number': o.id,
-      'status': 'paid',
+      'status': fullyRefunded ? 'refunded' : 'paid',
       'subtotal': o.subtotal,
+      'discount_amount': o.discountAmount,
       'tax_amount': o.tax,
       'grand_total': o.total,
-      'paid_amount': o.paid,
-      'balance_amount': o.total - o.paid,
+      // Complimentary: nothing was ever owed — the gap is absorbed, not a
+      // receivable, so both are forced to 0 rather than reflecting o.total.
+      'paid_amount': o.complimentary ? 0 : o.netPaid,
+      'balance_amount': o.complimentary ? 0 : (o.total > o.netPaid ? o.total - o.netPaid : 0),
       'paid_at': now,
+      if (o.complimentary) 'bill_type': 'complimentary',
+      if (o.complimentary && o.complimentaryReason != null) 'complimentary_reason': o.complimentaryReason,
+      // complimentary_authorized_by / payments.created_by_user_id stay unset:
+      // the app only retains the Supabase auth user id locally, not the
+      // bpos.users.id row id these FKs need (same reason every other
+      // *_user_id field in this file is left unset).
     });
 
-    for (var i = 0; i < liveLines.length; i++) {
-      final l = liveLines[i];
+    // What's actually billed: live (non-cancelled) quantity only. order_items
+    // above keeps the full original quantity; the gap is what's recorded in
+    // order_item_cancellations.
+    for (final l in o.liveLines) {
+      final realIndex = o.lines.indexOf(l);
       await _post('bill_items', {
-        'id': _deterministicUuid('$seed:bill_item:$i'),
+        'id': _deterministicUuid('$seed:bill_item:$realIndex'),
         'bill_id': billId,
-        'order_item_id': _deterministicUuid('$seed:order_item:$i'),
+        'order_item_id': _deterministicUuid('$seed:order_item:$realIndex'),
         'product_name_snapshot': l.item.name,
         'variant_name_snapshot': l.variant,
         'unit_price': l.unitPrice,
@@ -204,6 +258,18 @@ class BillSyncApi {
         'bill_id': billId,
         'payment_method_id': methodId,
         'amount': p.amount,
+      });
+    }
+
+    for (var i = 0; i < o.refunds.length; i++) {
+      final r = o.refunds[i];
+      await _post('payment_refunds', {
+        'id': _deterministicUuid('$seed:payment_refund:$i'),
+        'payment_id': _deterministicUuid('$seed:payment:${r.paymentIndex}'),
+        'outlet_id': outletId,
+        'amount': r.amount,
+        'reason': r.reason,
+        'created_at': r.at.toUtc().toIso8601String(),
       });
     }
   }

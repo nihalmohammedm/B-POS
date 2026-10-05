@@ -27,6 +27,9 @@ class ReceiptData {
   final DateTime at;
   final List<ReceiptLine> lines;
   final double fee;
+  /// Bill only: flat ₹ knocked off the subtotal before tax, and why.
+  final double discount;
+  final String discountReason;
   final List<Payment> payments;
   final bool reprint;
   /// KOT only: normal, cancellation, or modified item.
@@ -56,6 +59,8 @@ class ReceiptData {
     this.businessPhone = '',
     this.customer = '',
     this.fee = 0,
+    this.discount = 0,
+    this.discountReason = '',
     this.payments = const [],
     this.reprint = false,
     this.kind = KotKind.order,
@@ -126,6 +131,8 @@ class ReceiptData {
       at: DateTime.now(),
       customer: [o.customer, o.phone].where((x) => x.isNotEmpty).join(' · '),
       fee: o.fee,
+      discount: o.discountAmount,
+      discountReason: o.discountReason ?? '',
       payments: payments ?? o.payments,
       lines: merged.values.toList(),
     );
@@ -370,6 +377,7 @@ class ReceiptView extends StatelessWidget {
         ),
       const _Dash(),
       _kv('Subtotal (${t.items} items)', _n(t.sub)),
+      if (t.discount > 0) _kv('Discount${d.discountReason.isEmpty ? '' : ' · ${d.discountReason}'}', '-${_n(t.discount)}'),
       if (l.billSplitGst) ...[
         _kv('CGST @2.5%', _n(t.tax / 2)),
         _kv('SGST @2.5%', _n(t.tax / 2)),
@@ -407,19 +415,24 @@ class ReceiptView extends StatelessWidget {
   }
 }
 
-/// Bill arithmetic shared by the preview and the ESC/POS renderer.
+/// Bill arithmetic shared by the preview and the ESC/POS renderer. Mirrors
+/// Order's own getters (lib/models.dart) exactly — tax and total are
+/// computed on the subtotal *after* discount, same as what's charged/synced.
 class BillTotals {
   final int items;
-  final double sub, tax, total, round, tendered, change;
-  const BillTotals._(this.items, this.sub, this.tax, this.total, this.round, this.tendered, this.change);
+  final double sub, discount, tax, total, round, tendered, change;
+  const BillTotals._(this.items, this.sub, this.discount, this.tax, this.total, this.round, this.tendered, this.change);
 
   factory BillTotals.of(ReceiptData d) {
     final sub = d.lines.fold<double>(0, (a, l) => a + l.qty * l.rate);
-    final tax = sub * .05, raw = sub + tax + d.fee, total = raw.roundToDouble();
+    final discount = d.discount.clamp(0, sub).toDouble();
+    final discountedSub = sub - discount;
+    final tax = discountedSub * .05, raw = discountedSub + tax + d.fee, total = raw.roundToDouble();
     final cash = d.payments.where((p) => p.method == 'Cash' && p.tendered > 0).toList();
     return BillTotals._(
       d.lines.fold<int>(0, (a, l) => a + l.qty),
       sub,
+      discount,
       tax,
       total,
       total - raw,
@@ -627,6 +640,7 @@ Future<List<int>> receiptBytes(ReceiptData d, {PrintLayout? layout}) async {
       }
       t.text(dash);
       kv('Subtotal ($items items)', n(tot.sub));
+      if (tot.discount > 0) kv('Discount${d.discountReason.isEmpty ? '' : ' · ${d.discountReason}'}', '-${n(tot.discount)}');
       if (l.billSplitGst) {
         kv('CGST @2.5%', n(tot.tax / 2));
         kv('SGST @2.5%', n(tot.tax / 2));

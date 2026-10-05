@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
+import 'comp_refund.dart';
 
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
@@ -22,21 +23,56 @@ class _PayRow {
   bool get done => a > 0 && (method == 'Cash' ? r >= a : upiOk);
 }
 
+/// [onComplimentary]: when given, the dialog offers a "Mark complimentary"
+/// option (gated on `s.can('discount.apply')`); picking a reason calls this
+/// and closes the dialog with no payments, same as Cancel — the caller
+/// settles the order as complimentary instead of handling the (null) return.
+///
+/// [subtotal]/[onDiscount]: when given, the dialog offers "Add discount"
+/// (same gate). Picking a discount calls this and closes the dialog with no
+/// payments too — the caller applies it and reopens the dialog with the new
+/// (lower) [total], same pattern as complimentary.
 Future<List<Payment>?> showPaymentDialog(BuildContext context,
         {required String title,
         required String subtitle,
-        required double total}) =>
+        required double total,
+        double? subtotal,
+        double currentDiscount = 0,
+        String? currentDiscountReason,
+        ValueChanged<String>? onComplimentary,
+        ValueChanged<(double, String)>? onDiscount,
+        VoidCallback? onRemoveDiscount}) =>
     showDialog<List<Payment>>(
         context: context,
         barrierColor: const Color(0x59141414),
-        builder: (_) =>
-            _PayDialog(title: title, subtitle: subtitle, total: total));
+        builder: (_) => _PayDialog(
+            title: title,
+            subtitle: subtitle,
+            total: total,
+            subtotal: subtotal ?? total,
+            currentDiscount: currentDiscount,
+            currentDiscountReason: currentDiscountReason,
+            onComplimentary: onComplimentary,
+            onDiscount: onDiscount,
+            onRemoveDiscount: onRemoveDiscount));
 
 class _PayDialog extends StatefulWidget {
   final String title, subtitle;
-  final double total;
+  final double total, subtotal, currentDiscount;
+  final String? currentDiscountReason;
+  final ValueChanged<String>? onComplimentary;
+  final ValueChanged<(double, String)>? onDiscount;
+  final VoidCallback? onRemoveDiscount;
   const _PayDialog(
-      {required this.title, required this.subtitle, required this.total});
+      {required this.title,
+      required this.subtitle,
+      required this.total,
+      required this.subtotal,
+      this.currentDiscount = 0,
+      this.currentDiscountReason,
+      this.onComplimentary,
+      this.onDiscount,
+      this.onRemoveDiscount});
   @override
   State<_PayDialog> createState() => _PayDialogState();
 }
@@ -231,8 +267,55 @@ class _PayDialogState extends State<_PayDialog> {
           icon: const Icon(Icons.call_split, size: 18),
           label: const Text('Split between cash / UPI'),
         ),
+        if (widget.onComplimentary != null && StoreScope.of(context).can('discount.apply'))
+          TextButton.icon(
+            onPressed: _markComplimentary,
+            icon: const Icon(Icons.card_giftcard_outlined, size: 18),
+            label: const Text('Mark complimentary · nothing charged'),
+          ),
+        if (widget.onDiscount != null && StoreScope.of(context).can('discount.apply'))
+          widget.currentDiscount > 0
+              ? Row(children: [
+                  Expanded(
+                      child: Text(
+                          'Discount applied: -${inr(widget.currentDiscount, decimals: true)}'
+                          '${widget.currentDiscountReason == null ? '' : ' · ${widget.currentDiscountReason}'}',
+                          style: ts(13, c: C.redInk))),
+                  TextButton(onPressed: _removeDiscount, child: const Text('Remove')),
+                ])
+              : TextButton.icon(
+                  onPressed: _addDiscount,
+                  icon: const Icon(Icons.sell_outlined, size: 18),
+                  label: const Text('Add discount'),
+                ),
       ]),
     );
+  }
+
+  Future<void> _markComplimentary() async {
+    final s = StoreScope.of(context);
+    final reason = await reasonPickerDialog(context,
+        title: 'Settle as complimentary',
+        reasons: s.complimentaryReasons,
+        head: Text('${inr(widget.total, decimals: true)} will be settled with nothing charged.',
+            style: ts(15, c: C.ink2, h: 1.4)),
+        confirm: 'Settle · Complimentary');
+    if (reason == null || !mounted) return;
+    widget.onComplimentary!(reason);
+    Navigator.pop(context);
+  }
+
+  Future<void> _addDiscount() async {
+    final s = StoreScope.of(context);
+    final result = await discountDialog(context, subtotal: widget.subtotal, reasons: s.discountReasons);
+    if (result == null || !mounted) return;
+    widget.onDiscount!(result);
+    Navigator.pop(context);
+  }
+
+  void _removeDiscount() {
+    widget.onRemoveDiscount!();
+    Navigator.pop(context);
   }
 
   Widget _rowsPane(String remTxt) => rows.length == 1
@@ -507,11 +590,40 @@ Future<void> settleFlow(BuildContext context, Order o,
   if (o.isPaid) {
     pays = [Payment(o.payNote.split(' · ').last, o.total)];
   } else {
+    String? complimentaryReason;
+    (double, String)? discountResult;
+    var removeDiscount = false;
     pays = await showPaymentDialog(context,
         title: 'Settle payment · $label',
-        subtitle:
-            '${s.titleOf(o)} · Subtotal ${inr(o.subtotal, decimals: true)} · Tax ${inr(o.tax, decimals: true)}${o.fee > 0 ? ' · Delivery ${inr(o.fee)}' : ''}',
-        total: o.total);
+        subtitle: '${s.titleOf(o)} · Subtotal ${inr(o.subtotal, decimals: true)}'
+            '${o.discountAmount > 0 ? ' · Discount -${inr(o.discountAmount, decimals: true)}' : ''}'
+            ' · Tax ${inr(o.tax, decimals: true)}${o.fee > 0 ? ' · Delivery ${inr(o.fee)}' : ''}',
+        total: o.total,
+        subtotal: o.subtotal,
+        currentDiscount: o.discountAmount,
+        currentDiscountReason: o.discountReason,
+        onComplimentary: (r) => complimentaryReason = r,
+        onDiscount: (r) => discountResult = r,
+        onRemoveDiscount: () => removeDiscount = true);
+    if (complimentaryReason != null) {
+      if (!context.mounted) return;
+      s.assignBillNo(o);
+      final data = ReceiptData.bill(s, o, no: o.billNo);
+      s.settleComplimentary(o, reason: complimentaryReason!, by: s.sessionFullName ?? '');
+      toast(context, '$label settled · Complimentary ($complimentaryReason)');
+      if (print) await showPrintPreview(context, bill: data, subtitle: 'Complimentary · $complimentaryReason');
+      return;
+    }
+    if (discountResult != null) {
+      if (!context.mounted) return;
+      s.setDiscount(o, amount: discountResult!.$1, reason: discountResult!.$2);
+      return settleFlow(context, o, print: print); // reopen with the new, lower total
+    }
+    if (removeDiscount) {
+      if (!context.mounted) return;
+      s.clearDiscount(o);
+      return settleFlow(context, o, print: print);
+    }
   }
   if (pays == null || !context.mounted) return;
   s.assignBillNo(o);

@@ -4,10 +4,12 @@ import '../store.dart';
 import '../sync/bill_sync_api.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/receipt.dart';
+import 'comp_refund.dart';
 
 /// Settings › Settled bills: every settled order and whether it's made it to
-/// Supabase yet (see Store._syncPendingBills). Read-only other than a manual
-/// retry on a failed row — the push itself stays silent everywhere else.
+/// Supabase yet (see Store._syncPendingBills). Read-only other than bill
+/// reprints and a manual retry on a failed row — the push itself stays silent everywhere else.
 class SettledBillsScreen extends StatelessWidget {
   const SettledBillsScreen({super.key});
 
@@ -69,6 +71,7 @@ class SettledBillsScreen extends StatelessWidget {
 
   Widget _billRow(BuildContext context, Store s, Order o) {
     final status = s.billSyncStatus[o.id];
+    final refundable = o.payments.isNotEmpty && o.netPaid > 0.005;
     return Panel(
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(
@@ -77,6 +80,11 @@ class SettledBillsScreen extends StatelessWidget {
               Text(s.titleOf(o), style: ts(15, w: w5)),
               const SizedBox(width: 8),
               Text(o.billNo ?? '', style: ts(13, c: C.muted)),
+              if (o.complimentary) ...[const SizedBox(width: 8), const Pill('Complimentary', bg: C.skyTint, fg: C.skyInk)],
+              if (o.refunded > 0) ...[
+                const SizedBox(width: 8),
+                Pill('Refunded ${inr(o.refunded, decimals: true)}', bg: C.redTint, fg: C.redInk),
+              ],
             ]),
             const SizedBox(height: 4),
             Text('${inr(o.total, decimals: true)} · ${elapsed(o.billedAt ?? o.at)} ago', style: ts(13, c: C.ink2)),
@@ -88,6 +96,19 @@ class SettledBillsScreen extends StatelessWidget {
         ),
         const SizedBox(width: 12),
         _statusPill(status),
+        const SizedBox(width: 10),
+        Btn.outline('Reprint',
+            icon: Icons.print_outlined,
+            height: 36,
+            fontSize: 13,
+            onTap: () => showPrintPreview(context,
+                bill: ReceiptData.bill(s, o, payments: o.payments, no: o.billNo ?? s.previewBillNo(o)),
+                subtitle: '${s.titleOf(o)} · reprint',
+                printLabel: 'Reprint bill')),
+        if (refundable && s.can('payment.refund')) ...[
+          const SizedBox(width: 10),
+          Btn.outline('Refund', height: 36, fontSize: 13, fg: C.redInk, onTap: () => refundFlow(context, o)),
+        ],
         if (status?.state == BillSyncState.failed) ...[
           const SizedBox(width: 10),
           Btn.outline('Retry', height: 36, fontSize: 13, onTap: () => s.retryBillSync(o)),

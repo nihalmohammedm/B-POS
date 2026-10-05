@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../store.dart';
 import '../sync/bill_sync_api.dart';
 import '../theme.dart';
+import '../updater.dart';
 import '../widgets/common.dart';
 import 'captains_screen.dart';
 import 'kot_groups_screen.dart';
@@ -96,6 +97,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _printLayoutPanel(s),
                       const SizedBox(height: 16),
                       _overviewPanel(s),
+                      const SizedBox(height: 16),
+                      const UpdatePanel(),
                     ]),
                   ),
                 ),

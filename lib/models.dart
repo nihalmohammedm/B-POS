@@ -353,6 +353,12 @@ class ItemCancellation {
   final int qty, kotNo;
   final double unitPrice;
   final DateTime at;
+  /// Index of the cancelled line within [Order.lines] at the moment this was
+  /// recorded — lines are only ever appended there, never removed/reordered,
+  /// so this stays a stable reference. Used to link this cancellation back to
+  /// the right `order_item` when syncing to Supabase (lib/sync/bill_sync_api.dart).
+  /// -1 on records from before this field existed (nothing to link to).
+  final int lineIndex;
   const ItemCancellation(
       {required this.itemName,
       required this.optText,
@@ -361,7 +367,8 @@ class ItemCancellation {
       required this.reason,
       required this.by,
       required this.kotNo,
-      required this.at});
+      required this.at,
+      this.lineIndex = -1});
 
   Map<String, dynamic> toJson() => {
         'itemName': itemName,
@@ -372,6 +379,7 @@ class ItemCancellation {
         'by': by,
         'kotNo': kotNo,
         'at': at.toIso8601String(),
+        'lineIndex': lineIndex,
       };
 
   factory ItemCancellation.fromJson(Map<String, dynamic> j) => ItemCancellation(
@@ -383,6 +391,7 @@ class ItemCancellation {
         by: j['by'] as String? ?? '',
         kotNo: j['kotNo'] as int,
         at: DateTime.parse(j['at'] as String),
+        lineIndex: j['lineIndex'] as int? ?? -1,
       );
 }
 
@@ -410,6 +419,47 @@ class Payment {
       Payment(j['method'] as String, (j['amount'] as num).toDouble(), (j['tendered'] as num?)?.toDouble() ?? 0);
 }
 
+/// Default reasons offered when settling a bill as complimentary.
+const defaultComplimentaryReasons = [
+  "Owner's guest",
+  'Staff meal',
+  'Service recovery',
+  'Manager discretion',
+  'Other',
+];
+
+/// Default reasons offered when applying a discount.
+const defaultDiscountReasons = [
+  'Loyal customer',
+  'Service issue',
+  'Bulk order',
+  'Promotional offer',
+  'Manager discretion',
+  'Other',
+];
+
+/// Audit record of money handed back on an already-settled order. The
+/// original [Payment] it refunds is never edited — this is its own record,
+/// same principle as [ItemCancellation] for cancelled items.
+class Refund {
+  /// Index into [Order.payments] of the payment this refunds.
+  final int paymentIndex;
+  final double amount;
+  final String reason, by;
+  final DateTime at;
+  const Refund({required this.paymentIndex, required this.amount, required this.reason, required this.by, required this.at});
+
+  Map<String, dynamic> toJson() =>
+      {'paymentIndex': paymentIndex, 'amount': amount, 'reason': reason, 'by': by, 'at': at.toIso8601String()};
+  factory Refund.fromJson(Map<String, dynamic> j) => Refund(
+        paymentIndex: j['paymentIndex'] as int,
+        amount: (j['amount'] as num).toDouble(),
+        reason: j['reason'] as String? ?? '',
+        by: j['by'] as String? ?? '',
+        at: DateTime.parse(j['at'] as String),
+      );
+}
+
 class Order {
   int id;
   final OrderType type;
@@ -421,6 +471,7 @@ class Order {
   final List<OrderLine> lines = [];
   final List<Payment> payments = [];
   final List<ItemCancellation> cancellations = [];
+  final List<Refund> refunds = [];
   int pax;
   bool billed = false;
   /// When the current bill was printed (null before billing, or for bills
@@ -433,6 +484,15 @@ class Order {
   String? rider;
   String server;
   String payNote;
+  /// Settled with nothing charged, explicitly (never just a normal bill with
+  /// the amount manually zeroed — CLAUDE.md §18). Set only by
+  /// Store.settleComplimentary.
+  bool complimentary = false;
+  String? complimentaryReason;
+  /// Resolved to a flat ₹ amount regardless of how staff entered it (fixed
+  /// amount or % of subtotal) — see Store.setDiscount.
+  double discountAmount = 0;
+  String? discountReason;
 
   Order({
     required this.id,
@@ -450,16 +510,22 @@ class Order {
   }) : at = at ?? DateTime.now();
 
   double get subtotal => lines.fold<double>(0, (a, l) => a + l.total);
-  double get tax => subtotal * 0.05;
+  /// Subtotal after the discount — tax and the final total are computed on
+  /// this, not the raw subtotal, so a discount also reduces tax collected.
+  double get discountedSubtotal => (subtotal - discountAmount).clamp(0, subtotal);
+  double get tax => discountedSubtotal * 0.05;
   double get fee => type == OrderType.delivery ? 40 : 0;
-  double get raw => subtotal + tax + fee;
+  double get raw => discountedSubtotal + tax + fee;
   double get total => raw.roundToDouble();
   /// Lines with anything left after cancellations.
   List<OrderLine> get liveLines => lines.where((l) => l.activeQty > 0).toList();
   int get itemCount => lines.fold<int>(0, (a, l) => a + l.activeQty);
   double get paid => payments.fold<double>(0, (a, p) => a + p.amount);
-  /// Paid in full: taken up front (takeaway "Pay now") or marked paid.
-  bool get isPaid => payNote.startsWith('Paid') || (payments.isNotEmpty && paid >= total - .005);
+  double get refunded => refunds.fold<double>(0, (a, r) => a + r.amount);
+  double get netPaid => paid - refunded;
+  /// Paid in full: taken up front (takeaway "Pay now"), marked paid, or
+  /// settled as complimentary (nothing to collect by design).
+  bool get isPaid => complimentary || payNote.startsWith('Paid') || (payments.isNotEmpty && paid >= total - .005);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -482,7 +548,12 @@ class Order {
         'lines': lines.map((l) => l.toJson()).toList(),
         'payments': payments.map((p) => p.toJson()).toList(),
         'cancellations': cancellations.map((c) => c.toJson()).toList(),
+        'refunds': refunds.map((r) => r.toJson()).toList(),
         'voided': voided,
+        'complimentary': complimentary,
+        'complimentaryReason': complimentaryReason,
+        'discountAmount': discountAmount,
+        'discountReason': discountReason,
       };
 
   factory Order.fromJson(Map<String, dynamic> j) {
@@ -505,11 +576,16 @@ class Order {
       ..billedAt = DateTime.tryParse(j['billedAt'] as String? ?? '')
       ..dispatched = j['dispatched'] as bool? ?? false
       ..rider = j['rider'] as String?
-      ..voided = j['voided'] as bool? ?? false;
+      ..voided = j['voided'] as bool? ?? false
+      ..complimentary = j['complimentary'] as bool? ?? false
+      ..complimentaryReason = j['complimentaryReason'] as String?
+      ..discountAmount = (j['discountAmount'] as num?)?.toDouble() ?? 0
+      ..discountReason = j['discountReason'] as String?;
     o.lines.addAll((j['lines'] as List? ?? []).map((e) => OrderLine.fromJson(e as Map<String, dynamic>)));
     o.payments.addAll((j['payments'] as List? ?? []).map((e) => Payment.fromJson(e as Map<String, dynamic>)));
     o.cancellations
         .addAll((j['cancellations'] as List? ?? []).map((e) => ItemCancellation.fromJson(e as Map<String, dynamic>)));
+    o.refunds.addAll((j['refunds'] as List? ?? []).map((e) => Refund.fromJson(e as Map<String, dynamic>)));
     return o;
   }
 }

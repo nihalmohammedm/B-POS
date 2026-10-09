@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models.dart';
@@ -19,6 +20,14 @@ class TablesScreen extends StatefulWidget {
 class _TablesScreenState extends State<TablesScreen> {
   String? floor;
   String? sel;
+  bool _editing = false;
+  String? _dragId;
+  Offset _drag = Offset.zero;
+  // The plan's size in cells and its on-screen scale, set while building (used by the drag handlers).
+  int _cols = 1, _rows = 1;
+  double _scale = 1;
+
+  static const _unitW = 150.0, _unitH = 128.0, _gap = 24.0;
 
   @override
   Widget build(BuildContext context) {
@@ -95,15 +104,38 @@ class _TablesScreenState extends State<TablesScreen> {
               Text('Shared', style: ts(13)),
             ]),
           ),
+          if (floor != null && _editing)
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              Btn.outline('Reset', height: 44, icon: Icons.restart_alt, onTap: () => _reset(s)),
+              const SizedBox(width: 8),
+              Btn('Done', height: 44, icon: Icons.check, onTap: () => setState(() => _editing = false)),
+            ]),
         ]),
+        if (_editing) ...[
+          const SizedBox(height: 10),
+          Text('Drag a table to move it within the floor. Tables snap to the grid and can\'t overlap. Tap Done when you\'re happy.',
+              style: ts(13, c: C.muted)),
+        ],
         const SizedBox(height: 16),
         Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-                color: const Color(0xFFF6F6F6), borderRadius: BorderRadius.circular(24), border: Border.all(color: C.line)),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Wrap(spacing: 24, runSpacing: 24, children: [if (floor != null) for (final t in s.tablesOn(floor!)) _tile(s, t, wide)]),
+          // Hold the grey area for 3 seconds to start editing the layout (managers/owners only).
+          child: RawGestureDetector(
+            behavior: HitTestBehavior.opaque,
+            gestures: {
+              LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+                () => LongPressGestureRecognizer(duration: const Duration(seconds: 3)),
+                (r) => r.onLongPress = _editing || floor == null || !s.can('settings.manage')
+                    ? null
+                    : () {
+                        HapticFeedback.mediumImpact();
+                        setState(() => _editing = true);
+                      },
+              ),
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                  color: const Color(0xFFF6F6F6), borderRadius: BorderRadius.circular(24), border: Border.all(color: C.line)),
+              child: floor == null ? const SizedBox() : _canvas(s, wide),
             ),
           ),
         ),
@@ -122,6 +154,92 @@ class _TablesScreenState extends State<TablesScreen> {
     }));
   }
 
+  Future<void> _reset(Store s) async {
+    final ok = await confirmDialog(context,
+        title: 'Reset the layout?', body: 'Tables on $floor go back to an automatic arrangement.', ok: 'Reset');
+    if (ok && mounted) s.resetLayout(floor!);
+  }
+
+  /// The floor plan: every table at its saved grid cell. The grid is as many columns and rows as fit
+  /// on screen (no scrolling); if the tables need more room than that, the whole plan scales down to fit.
+  /// Hold the grey area for 3 seconds to drag tables around; positions persist and menu syncs keep them.
+  Widget _canvas(Store s, bool wide) {
+    const pw = _unitW + _gap, ph = _unitH + _gap;
+    return LayoutBuilder(builder: (c, cons) {
+      final availW = math.max(1.0, cons.maxWidth - 48), availH = math.max(1.0, cons.maxHeight - 48);
+      final fitCols = math.max(1, ((availW + _gap) / pw).floor()), fitRows = math.max(1, ((availH + _gap) / ph).floor());
+      s.placeUnplaced(floor!, fitCols);
+      final list = s.tablesOn(floor!)..sort((a, b) => a.id == _dragId ? 1 : b.id == _dragId ? -1 : 0);
+      var cols = fitCols, rows = fitRows;
+      for (final t in list) {
+        cols = math.max(cols, t.gx! + t.w);
+        rows = math.max(rows, t.gy! + t.h);
+      }
+      _cols = cols;
+      _rows = rows;
+      final cw = cols * pw - _gap, ch = rows * ph - _gap;
+      _scale = math.min(1.0, math.min(availW / cw, availH / ch));
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: cw * _scale,
+            height: ch * _scale,
+            child: FittedBox(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: cw,
+                height: ch,
+                child: Stack(clipBehavior: Clip.none, children: [
+                  if (_editing) Positioned.fill(child: CustomPaint(painter: _GridPainter(cols, rows, _unitW, _unitH, _gap))),
+                  for (final t in list)
+                    Positioned(
+                      // Keyed so the dragged table keeps its own gesture when it is moved to the top of the stack.
+                      key: ValueKey(t.id),
+                      left: t.gx! * pw + (t.id == _dragId ? _drag.dx : 0),
+                      top: t.gy! * ph + (t.id == _dragId ? _drag.dy : 0),
+                      child: _editing
+                          ? GestureDetector(
+                              onPanStart: (_) => setState(() {
+                                _dragId = t.id;
+                                _drag = Offset.zero;
+                                sel = t.id;
+                              }),
+                              // Deltas arrive in screen pixels; the plan may be scaled down.
+                              onPanUpdate: (d) => setState(() => _drag += d.delta / _scale),
+                              onPanEnd: (_) => _drop(s, t),
+                              onPanCancel: () => setState(() => _dragId = null),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow:
+                                      t.id == _dragId ? const [BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 8))] : null,
+                                ),
+                                child: IgnorePointer(child: _tile(s, t, wide)),
+                              ),
+                            )
+                          : _tile(s, t, wide),
+                    ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  void _drop(Store s, TableModel t) {
+    const pw = _unitW + _gap, ph = _unitH + _gap;
+    final gx = ((t.gx! * pw + _drag.dx) / pw).round(), gy = ((t.gy! * ph + _drag.dy) / ph).round();
+    setState(() {
+      _dragId = null;
+      _drag = Offset.zero;
+    });
+    s.moveTable(t, gx, gy, cols: _cols, rows: _rows);
+  }
+
   void _openDetails(String id) => showPanelDialog(context,
       maxWidth: 440,
       builder: (ctx) => SizedBox(
@@ -135,8 +253,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ));
 
   Widget _tile(Store s, TableModel t, bool wide) {
-    const unitW = 150.0, unitH = 128.0, gap = 24.0;
-    final w = unitW * t.w + gap * (t.w - 1), h = unitH * t.h + gap * (t.h - 1);
+    final w = _unitW * t.w + _gap * (t.w - 1), h = _unitH * t.h + _gap * (t.h - 1);
     final selected = t.id == sel;
     final seatColors = <Color>[];
     for (var i = 0; i < t.parties.length; i++) {
@@ -441,6 +558,8 @@ class _TableDetailsState extends State<TableDetails> {
         const SizedBox(width: 10),
         RoundIcon(Icons.print_disabled_outlined, size: 52, onTap: () => settleFlow(context, o, print: false), tooltip: 'Settle without printing'),
         const SizedBox(width: 10),
+        RoundIcon(Icons.pause_circle_outline, size: 52, onTap: () => holdBillFlow(context, o), tooltip: 'Hold bill · clear the table'),
+        const SizedBox(width: 10),
         Expanded(
           child: o.billed
               ? Btn.outline('Reopen', expand: true, onTap: () => reopenFlow(context, o))
@@ -478,4 +597,30 @@ class _TableDetailsState extends State<TableDetails> {
       }),
     ];
   }
+}
+
+/// Faint cell outlines behind the tables while the layout is being edited.
+class _GridPainter extends CustomPainter {
+  final int cols, rows;
+  final double cw, ch, gap;
+  _GridPainter(this.cols, this.rows, this.cw, this.ch, this.gap);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final fill = Paint()..color = const Color(0x0A000000);
+    final line = Paint()
+      ..color = const Color(0x1F000000)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        final rr = RRect.fromRectAndRadius(Rect.fromLTWH(c * (cw + gap), r * (ch + gap), cw, ch), const Radius.circular(20));
+        canvas.drawRRect(rr, fill);
+        canvas.drawRRect(rr, line);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_GridPainter o) => o.cols != cols || o.rows != rows;
 }

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter/services.dart';
 import '../models.dart';
 import '../theme.dart';
@@ -15,8 +16,13 @@ class _PayRow {
   String method;
   final TextEditingController amt;
   final TextEditingController rec = TextEditingController();
-  bool upiOk =
-      true; // UPI is confirmed by the guest paying; no separate tick step
+
+  /// UPI: the cashier has seen the money arrive (phone / soundbox). Cleared when
+  /// the amount or the UPI ID changes, since the check was for that payment.
+  double? _okAmt;
+  bool get upiOk => _okAmt != null && (_okAmt! - a).abs() < .005;
+  set upiOk(bool v) => _okAmt = v ? a : null;
+  String? upiId; // which UPI ID's QR was shown; null = the bill default
   _PayRow(this.method, double a) : amt = TextEditingController(text: _num(a));
   double get a => double.tryParse(amt.text) ?? 0;
   double get r => double.tryParse(rec.text) ?? 0;
@@ -103,6 +109,27 @@ class _PayDialogState extends State<_PayDialog> {
         active = rows.length - 1;
       });
 
+  List<Payment> _payments() {
+    final s = StoreScope.read(context);
+    return [
+      for (final r in rows)
+        if (r.method == 'Cash')
+          Payment('Cash', r.a, r.r)
+        else
+          Payment(
+              'UPI',
+              r.a,
+              0,
+              (s.printLayout.upiAccounts
+                              .where((a) => a.id == r.upiId)
+                              .firstOrNull ??
+                          s.printLayout.billUpi)
+                      ?.label ??
+                  '',
+              s.sessionFullName ?? ''),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final remTxt = remaining.abs() < .01
@@ -111,13 +138,7 @@ class _PayDialogState extends State<_PayDialog> {
             ? 'Remaining ${inr(remaining, decimals: true)}'
             : 'Over by ${inr(-remaining, decimals: true)}';
     void complete() {
-      if (ok)
-        Navigator.pop(
-            context,
-            rows
-                .map(
-                    (r) => Payment(r.method, r.a, r.method == 'Cash' ? r.r : 0))
-                .toList());
+      if (ok) Navigator.pop(context, _payments());
     }
 
     return KeyScope(
@@ -205,12 +226,7 @@ class _PayDialogState extends State<_PayDialog> {
                   Btn.outline('Cancel', onTap: () => Navigator.pop(context)),
                   Btn('Complete · ${inr(widget.total)}',
                       onTap: ok
-                          ? () => Navigator.pop(
-                              context,
-                              rows
-                                  .map((r) => Payment(r.method, r.a,
-                                      r.method == 'Cash' ? r.r : 0))
-                                  .toList())
+                          ? () => Navigator.pop(context, _payments())
                           : null),
                 ],
               ),
@@ -267,13 +283,15 @@ class _PayDialogState extends State<_PayDialog> {
           icon: const Icon(Icons.call_split, size: 18),
           label: const Text('Split between cash / UPI'),
         ),
-        if (widget.onComplimentary != null && StoreScope.of(context).can('discount.apply'))
+        if (widget.onComplimentary != null &&
+            StoreScope.of(context).can('discount.apply'))
           TextButton.icon(
             onPressed: _markComplimentary,
             icon: const Icon(Icons.card_giftcard_outlined, size: 18),
             label: const Text('Mark complimentary · nothing charged'),
           ),
-        if (widget.onDiscount != null && StoreScope.of(context).can('discount.apply'))
+        if (widget.onDiscount != null &&
+            StoreScope.of(context).can('discount.apply'))
           widget.currentDiscount > 0
               ? Row(children: [
                   Expanded(
@@ -281,7 +299,8 @@ class _PayDialogState extends State<_PayDialog> {
                           'Discount applied: -${inr(widget.currentDiscount, decimals: true)}'
                           '${widget.currentDiscountReason == null ? '' : ' · ${widget.currentDiscountReason}'}',
                           style: ts(13, c: C.redInk))),
-                  TextButton(onPressed: _removeDiscount, child: const Text('Remove')),
+                  TextButton(
+                      onPressed: _removeDiscount, child: const Text('Remove')),
                 ])
               : TextButton.icon(
                   onPressed: _addDiscount,
@@ -297,7 +316,8 @@ class _PayDialogState extends State<_PayDialog> {
     final reason = await reasonPickerDialog(context,
         title: 'Settle as complimentary',
         reasons: s.complimentaryReasons,
-        head: Text('${inr(widget.total, decimals: true)} will be settled with nothing charged.',
+        head: Text(
+            '${inr(widget.total, decimals: true)} will be settled with nothing charged.',
             style: ts(15, c: C.ink2, h: 1.4)),
         confirm: 'Settle · Complimentary');
     if (reason == null || !mounted) return;
@@ -307,7 +327,8 @@ class _PayDialogState extends State<_PayDialog> {
 
   Future<void> _addDiscount() async {
     final s = StoreScope.of(context);
-    final result = await discountDialog(context, subtotal: widget.subtotal, reasons: s.discountReasons);
+    final result = await discountDialog(context,
+        subtotal: widget.subtotal, reasons: s.discountReasons);
     if (result == null || !mounted) return;
     widget.onDiscount!(result);
     Navigator.pop(context);
@@ -470,22 +491,85 @@ class _PayDialogState extends State<_PayDialog> {
     final idx = math.min(active, rows.length - 1);
     final r = rows[idx];
     if (r.method == 'UPI') {
+      final accts = StoreScope.of(context).printLayout.upiAccounts;
+      final acct = accts.isEmpty
+          ? null
+          : accts.firstWhere((a) => a.id == r.upiId,
+              orElse: () => StoreScope.of(context).printLayout.billUpi!);
       return Padding(
         padding: const EdgeInsets.all(20),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-              color: C.greenTint, borderRadius: BorderRadius.circular(16)),
-          child: Row(children: [
-            Expanded(
-                child: Text(
-                    rows.length > 1
-                        ? 'UPI · Payment ${idx + 1}'
-                        : 'Collect via UPI',
-                    style: ts(15, w: w5, c: C.greenInk))),
-            Text(inr(r.a, decimals: true), style: ts(26, w: w6, c: C.greenInk)),
-          ]),
-        ),
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+                color: C.greenTint, borderRadius: BorderRadius.circular(16)),
+            child: Row(children: [
+              Expanded(
+                  child: Text(
+                      rows.length > 1
+                          ? 'UPI · Payment ${idx + 1}'
+                          : 'Collect via UPI',
+                      style: ts(15, w: w5, c: C.greenInk))),
+              Text(inr(r.a, decimals: true),
+                  style: ts(26, w: w6, c: C.greenInk)),
+            ]),
+          ),
+          if (acct != null) ...[
+            if (accts.length > 1) ...[
+              const SizedBox(height: 14),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final a in accts)
+                  ChoiceChip(
+                      label: Text(a.label, style: ts(14)),
+                      selected: a.id == acct.id,
+                      onSelected: (_) => setState(() {
+                            r.upiId = a.id;
+                            r.upiOk = false;
+                          })),
+              ]),
+            ],
+            const SizedBox(height: 16),
+            Center(
+                child: QrImageView(
+                    data: acct.uri(r.a),
+                    size: 200,
+                    backgroundColor: Colors.white)),
+            const SizedBox(height: 6),
+            Center(child: Text(acct.vpa, style: ts(13, c: C.muted))),
+          ],
+          const SizedBox(height: 16),
+          InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() => r.upiOk = !r.upiOk),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              decoration: BoxDecoration(
+                  color: r.upiOk ? C.greenTint : Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                      color: r.upiOk ? C.green : C.line,
+                      width: r.upiOk ? 2 : 1)),
+              child: Row(children: [
+                Icon(
+                    r.upiOk ? Icons.check_circle : Icons.radio_button_unchecked,
+                    color: r.upiOk ? C.green : C.muted,
+                    size: 28),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Payment received', style: ts(16, w: w5)),
+                        Text(
+                            'Tick once ${inr(r.a, decimals: true)} shows on your phone or soundbox',
+                            style: ts(12, c: C.muted)),
+                      ]),
+                ),
+              ]),
+            ),
+          ),
+        ]),
       );
     }
     final bal = r.r - r.a;
@@ -595,7 +679,8 @@ Future<void> settleFlow(BuildContext context, Order o,
     var removeDiscount = false;
     pays = await showPaymentDialog(context,
         title: 'Settle payment · $label',
-        subtitle: '${s.titleOf(o)} · Subtotal ${inr(o.subtotal, decimals: true)}'
+        subtitle:
+            '${s.titleOf(o)} · Subtotal ${inr(o.subtotal, decimals: true)}'
             '${o.discountAmount > 0 ? ' · Discount -${inr(o.discountAmount, decimals: true)}' : ''}'
             ' · Tax ${inr(o.tax, decimals: true)}${o.fee > 0 ? ' · Delivery ${inr(o.fee)}' : ''}',
         total: o.total,
@@ -609,15 +694,19 @@ Future<void> settleFlow(BuildContext context, Order o,
       if (!context.mounted) return;
       s.assignBillNo(o);
       final data = ReceiptData.bill(s, o, no: o.billNo);
-      s.settleComplimentary(o, reason: complimentaryReason!, by: s.sessionFullName ?? '');
+      s.settleComplimentary(o,
+          reason: complimentaryReason!, by: s.sessionFullName ?? '');
       toast(context, '$label settled · Complimentary ($complimentaryReason)');
-      if (print) await showPrintPreview(context, bill: data, subtitle: 'Complimentary · $complimentaryReason');
+      if (print)
+        await showPrintPreview(context,
+            bill: data, subtitle: 'Complimentary · $complimentaryReason');
       return;
     }
     if (discountResult != null) {
       if (!context.mounted) return;
       s.setDiscount(o, amount: discountResult!.$1, reason: discountResult!.$2);
-      return settleFlow(context, o, print: print); // reopen with the new, lower total
+      return settleFlow(context, o,
+          print: print); // reopen with the new, lower total
     }
     if (removeDiscount) {
       if (!context.mounted) return;
@@ -656,9 +745,33 @@ Future<void> printBillFlow(BuildContext context, Order o) async {
   if (ok && !o.billed) s.printBill(o);
 }
 
+/// Prints the bill if needed, then clears the table and leaves the bill waiting
+/// under Payments.
+Future<void> holdBillFlow(BuildContext context, Order o) async {
+  final s = StoreScope.read(context);
+  if (o.held) return;
+  if (!o.billed) {
+    await printBillFlow(context, o);
+    if (!context.mounted || !o.billed) return;
+  }
+  final label = s.labelOf(o);
+  final ok = await confirmDialog(context,
+      title: 'Hold bill for $label?',
+      body:
+          'Table $label will be cleared. Bill ${o.billNo} (${inr(o.total)}) stays under Payments, waiting to settle.',
+      ok: 'Hold bill');
+  if (!ok || !context.mounted) return;
+  if (s.holdBill(o))
+    toast(context, '$label held · bill ${o.billNo} waiting in Payments');
+}
+
 Future<void> reopenFlow(BuildContext context, Order o) async {
   final s = StoreScope.read(context);
   final label = s.labelOf(o);
+  if (o.held) {
+    toast(context, '$label is on hold · settle it from Payments', error: true);
+    return;
+  }
   if (o.isPaid) {
     toast(context, '$label is already paid · a paid bill can\'t be reopened',
         error: true);

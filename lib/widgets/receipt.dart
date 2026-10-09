@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:unified_esc_pos_printer/unified_esc_pos_printer.dart' as esc;
 import '../models.dart';
 import '../print_layout.dart';
@@ -391,25 +392,27 @@ class ReceiptView extends StatelessWidget {
       if (d.payments.isNotEmpty) ...[
         for (final p in d.payments) _kv('Paid · ${p.method}', _n(p.amount)),
         if (t.tendered > 0) ...[_kv('Cash tendered', _n(t.tendered)), _kv('Change returned', _n(t.change), w: FontWeight.w700)],
-      ] else if (l.billShowQr) ...[
+      ] else if (l.billShowQr && l.billUpi != null) ...[
         const SizedBox(height: 6),
         Center(
           child: Container(
-            width: 112,
-            height: 112,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(border: Border.all(color: const Color(0xFF111111), width: 1.5)),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.qr_code_2, size: 64, color: Color(0xFF111111)),
-              Text(inr(t.total), style: _m(10)),
-            ]),
+            color: Colors.white,
+            padding: const EdgeInsets.all(2),
+            child: QrImageView(
+                data: l.billUpi!.uri(t.total.roundToDouble(), note: 'Bill ${d.no}'),
+                size: _narrow ? 120 : 150,
+                padding: EdgeInsets.zero,
+                backgroundColor: Colors.white),
           ),
         ),
         const SizedBox(height: 4),
-        _c('Scan to pay', _m(11)),
+        _c('Scan to pay ${inr(t.total, decimals: true)}', _m(11, FontWeight.w600)),
+        _c(l.billUpi!.vpa, _m(10)),
       ],
       const SizedBox(height: 14),
       for (final f in PrintLayout.linesOf(l.billFooter)) _c(f, _m(12, FontWeight.w600)),
+      if (d.type == OrderType.takeaway)
+        for (final f in PrintLayout.linesOf(l.billFooterTakeaway)) _c(f, _m(12, FontWeight.w600)),
       if (l.billShowWords) _c('Rupees ${_words(t.total.round())} Only', grey.copyWith(fontSize: _narrow ? 9 : 10)),
     ];
   }
@@ -659,9 +662,22 @@ Future<List<int>> receiptBytes(ReceiptData d, {PrintLayout? layout}) async {
         kv('Cash tendered', n(tot.tendered));
         kv('Change returned', n(tot.change), b);
       }
+      final upi = l.billUpi;
+      if (d.payments.isEmpty && l.billShowQr && upi != null) {
+        t.feed();
+        t.qrcode(upi.uri(tot.total.roundToDouble(), note: 'Bill ${d.no}'),
+            size: paper == esc.PaperSize.mm58 ? esc.QRSize.size5 : esc.QRSize.size6, cor: esc.QRCorrection.M);
+        c('Scan to pay Rs.${n(tot.total)}', b);
+        c(upi.vpa);
+      }
       t.feed();
       for (final f in PrintLayout.linesOf(l.billFooter)) {
         c(f, b);
+      }
+      if (d.type == OrderType.takeaway) {
+        for (final f in PrintLayout.linesOf(l.billFooterTakeaway)) {
+          c(f, b);
+        }
       }
       if (l.billShowWords) c('Rupees ${_words(tot.total.round())} Only');
     }

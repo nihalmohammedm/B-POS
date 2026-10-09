@@ -69,6 +69,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
       final pane = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Wrap(spacing: 12, runSpacing: 12, children: [
           _stat('Bills waiting', '${all.length}'),
+          if (all.any((o) => o.held)) _stat('On hold', '${all.where((o) => o.held).length}'),
           _stat('To collect', inr(due), strong: true),
           _stat('Oldest', oldest == null ? '—' : _mins(oldest), alert: (oldest ?? 0) >= _lateMin),
         ]),
@@ -169,6 +170,10 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                 Flexible(child: Text(s.titleOf(o), maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(16, w: w5))),
                 const SizedBox(width: 8),
                 Pill(o.type.label, bg: tint.$1, fg: tint.$2, size: 11),
+                if (o.held) ...[
+                  const SizedBox(width: 6),
+                  const Pill('On hold', bg: C.amberTint, fg: C.amberInk, size: 11),
+                ],
               ]),
               const SizedBox(height: 2),
               Text(
@@ -227,7 +232,10 @@ class _BillDetail extends StatelessWidget {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Bill ${o.billNo ?? ''} · ${s.titleOf(o)}', style: ts(18, w: w5)),
-                Text(o.billedAt == null ? 'Printed · unpaid' : 'Printed ${elapsed(o.billedAt!)} ago · unpaid',
+                Text(
+                    o.held
+                        ? 'On hold ${elapsed(o.heldAt ?? o.at)} · table cleared · unpaid'
+                        : o.billedAt == null ? 'Printed · unpaid' : 'Printed ${elapsed(o.billedAt!)} ago · unpaid',
                     style: ts(13, c: C.amberInk)),
               ]),
             ),
@@ -260,8 +268,8 @@ class _BillDetail extends StatelessWidget {
             const SizedBox(height: 12),
             Row(children: [
               Expanded(child: Btn.outline('Reprint', icon: Icons.print_outlined, expand: true, onTap: () => then(() => printBillFlow(ctx, o)))),
-              const SizedBox(width: 10),
-              Expanded(child: Btn.outline('Reopen', icon: Icons.lock_open, expand: true, onTap: () => then(() => reopenFlow(ctx, o)))),
+              if (!o.held) const SizedBox(width: 10),
+              if (!o.held) Expanded(child: Btn.outline('Reopen', icon: Icons.lock_open, expand: true, onTap: () => then(() => reopenFlow(ctx, o)))),
             ]),
             const SizedBox(height: 10),
             Btn('Collect ${inr(o.total)}', bg: C.green, height: 56, expand: true, onTap: () => then(() => settleFlow(ctx, o))),

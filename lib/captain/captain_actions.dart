@@ -53,7 +53,7 @@ abstract class CaptainActions {
   static Order resolve(Store s, OrderRef ref, {int? orderId, required Order Function() blank}) {
     if (ref.dineIn) {
       for (final o in s.orders) {
-        if (o.tableId == ref.tableId && o.partyKey == ref.partyKey) return o;
+        if (!o.held && o.tableId == ref.tableId && o.partyKey == ref.partyKey) return o;
       }
       return blank();
     }

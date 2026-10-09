@@ -12,6 +12,8 @@ import 'models.dart';
 import 'link/link_models.dart';
 import 'print_layout.dart';
 import 'sync/bill_sync_api.dart';
+import 'sync/menu_admin_api.dart';
+import 'sync/web_order_api.dart';
 
 class Store extends ChangeNotifier {
   /// [mirror]: a captain device's copy of the main POS. Its data comes from the
@@ -126,6 +128,7 @@ class Store extends ChangeNotifier {
     backofficeUrl = await _getSetting('backofficeUrl') ?? backofficeUrl;
     backofficeKey = await _getSetting('backofficeKey') ?? backofficeKey;
     backofficeOutletCode = await _getSetting('backofficeOutletCode') ?? backofficeOutletCode;
+    webMenuBaseUrl = await _getSetting('webMenuBaseUrl') ?? webMenuBaseUrl;
     outletName = await _getSetting('outletName') ?? outletName;
     outletAddress = await _getSetting('outletAddress') ?? outletAddress;
     outletPhone = await _getSetting('outletPhone') ?? outletPhone;
@@ -293,6 +296,8 @@ class Store extends ChangeNotifier {
     Connectivity().checkConnectivity().then((r) => _applyConnectivity(r, triggerSync: false));
     _connectivitySub = Connectivity().onConnectivityChanged.listen(_applyConnectivity);
     _periodicSyncTimer = Timer.periodic(const Duration(minutes: 15), (_) => _backgroundSync());
+    // Only the Main POS watches the web-order inbox; captain mirrors never talk to the backoffice.
+    if (!mirror) _webOrderTimer = Timer.periodic(const Duration(seconds: 20), (_) => pollWebOrders());
   }
 
   void _applyConnectivity(List<ConnectivityResult> result, {bool triggerSync = true}) {
@@ -453,6 +458,7 @@ class Store extends ChangeNotifier {
     _disposed = true;
     _connectivitySub?.cancel();
     _periodicSyncTimer?.cancel();
+    _webOrderTimer?.cancel();
     _saveDebounce?.cancel();
     _notices.close();
     _revoked.close();
@@ -466,6 +472,15 @@ class Store extends ChangeNotifier {
     printLayout = l.copy();
     notifyListeners();
     _setSetting('printLayout', jsonEncode(printLayout.toJson()));
+  }
+
+  /// Edits the UPI IDs / pay-QR switch on its own, straight from Settings, and
+  /// saves at once. They live in the print layout so bills and previews read
+  /// them from one place.
+  void editPaymentQr(void Function(PrintLayout l) f) {
+    final l = printLayout.copy();
+    f(l);
+    setPrintLayout(l);
   }
 
   // ---------- captain link (main POS side) ----------
@@ -584,6 +599,126 @@ class Store extends ChangeNotifier {
     } catch (_) {
       // Corrupt value: captains re-pair.
     }
+  }
+
+  // ---------- web orders (public menu) ----------
+  // Customers order from the public web menu (web_menu/index.html). Those land in
+  // bpos.web_orders as "pending"; the counter accepts one here, which turns it into a
+  // normal takeaway order + KOT, or rejects it. Polled, not pushed: offline just means
+  // the inbox doesn't refresh until the connection returns.
+
+  final List<WebOrder> webOrders = [];
+
+  /// Where web_menu/index.html is hosted, e.g. https://menu.example.com — set in Settings → Web ordering.
+  String webMenuBaseUrl = '';
+
+  /// Public menu switched on for this outlet; null until read from the backoffice.
+  bool? webMenuEnabled;
+
+  /// The customer link for [tableLabel] (adds `&table=` so a table QR pre-fills it), or '' until a host is set.
+  String webMenuLink({String tableLabel = ''}) {
+    final base = webMenuBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) return '';
+    final t = tableLabel.trim();
+    return '$base/?o=${Uri.encodeQueryComponent(backofficeOutletCode)}${t.isEmpty ? '' : '&table=${Uri.encodeQueryComponent(t)}'}';
+  }
+
+  void setWebMenuBaseUrl(String v) {
+    webMenuBaseUrl = v.trim();
+    notifyListeners();
+    _setSetting('webMenuBaseUrl', webMenuBaseUrl);
+  }
+
+  Future<void> refreshWebMenuEnabled() async {
+    try {
+      webMenuEnabled = await WebOrderApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: sessionAccessToken ?? backofficeKey)
+          .fetchEnabled(backofficeOutletCode);
+      notifyListeners();
+    } catch (_) {
+      // Offline: leave the last known value.
+    }
+  }
+
+  Future<void> setWebMenuEnabled(bool on) async {
+    final api = _webApi();
+    if (api == null || !isOnline) throw WebOrderException('Go online to change this');
+    await api.setEnabled(backofficeOutletCode, on);
+    webMenuEnabled = on;
+    notifyListeners();
+  }
+  Timer? _webOrderTimer;
+  bool _pollingWebOrders = false;
+
+  WebOrderApi? _webApi() {
+    final token = sessionAccessToken;
+    if (token == null || token.isEmpty) return null;
+    return WebOrderApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: token);
+  }
+
+  Future<void> pollWebOrders() async {
+    if (mirror || _pollingWebOrders || !isOnline || !can('order.view')) return;
+    final api = _webApi();
+    if (api == null) return;
+    _pollingWebOrders = true;
+    try {
+      final fresh = await api.fetchPending(await _resolveOutletId());
+      final changed = fresh.length != webOrders.length || fresh.any((w) => !webOrders.any((x) => x.id == w.id));
+      if (changed) {
+        webOrders
+          ..clear()
+          ..addAll(fresh);
+        notifyListeners();
+      }
+    } catch (_) {
+      // Offline or backend unreachable: keep what we have, retry next tick.
+    } finally {
+      _pollingWebOrders = false;
+    }
+  }
+
+  /// Accepts [w]: claims it on the backoffice first (so two counters can't both take it), then
+  /// creates a takeaway order and its KOTs. Returns the order and KOTs to print, or null when
+  /// someone else already decided it. Throws if it can't be accepted (item missing from this
+  /// POS's menu, offline, no permission) before anything is changed.
+  Future<(Order, List<Kot>)?> acceptWebOrder(WebOrder w) async {
+    final api = _webApi();
+    if (api == null || !isOnline) throw WebOrderException('Go online to accept web orders');
+    if (!can('order.create')) throw WebOrderException('Your role cannot accept orders');
+
+    // Build and validate everything locally first, so a menu mismatch can't strand a claimed order.
+    final lines = <OrderLine>[];
+    for (final l in w.lines) {
+      final item = menu.where((m) => m.id == l.productId).firstOrNull;
+      if (item == null) throw WebOrderException('"${l.name}" is not on this POS menu · sync the menu first');
+      if (l.variant != null && !item.variants.any((v) => v.name == l.variant)) {
+        throw WebOrderException('"${l.name} · ${l.variant}" changed on the menu · sync the menu first');
+      }
+      lines.add(OrderLine(item: item, variant: l.variant, addons: [...l.addons], qty: l.qty));
+    }
+    final note = w.notes.trim();
+    if (note.isNotEmpty && lines.isNotEmpty) lines.first.note = note;
+
+    final claimed = await api.decide(w.id, accept: true);
+    webOrders.removeWhere((x) => x.id == w.id);
+    if (!claimed) {
+      notifyListeners();
+      return null;
+    }
+    final o = draft(OrderType.takeaway, server: 'Web')
+      ..customer = w.customer
+      ..phone = w.phone
+      ..address = [if (w.dineIn) 'Dine in${w.table.isEmpty ? '' : ' · Table ${w.table}'}' else 'Takeaway', if (note.isNotEmpty) note]
+          .join(' · ');
+    final ks = sendKot(o, lines);
+    return (o, ks);
+  }
+
+  Future<void> rejectWebOrder(WebOrder w, {String? reason}) async {
+    final api = _webApi();
+    if (api == null || !isOnline) throw WebOrderException('Go online to reject web orders');
+    await api.decide(w.id, accept: false, reason: reason);
+    webOrders.removeWhere((x) => x.id == w.id);
+    notifyListeners();
   }
 
   // ---------- bill requests & notices ----------
@@ -1069,6 +1204,40 @@ class Store extends ChangeNotifier {
     }
   }
 
+  // ---------- menu editing (written to Supabase for this outlet) ----------
+
+  bool get canEditMenu => can('menu.manage') && sessionAccessToken != null;
+
+  Future<MenuAdminApi> _menuAdmin() async {
+    final token = sessionAccessToken;
+    if (token == null || !can('menu.manage')) throw MenuAdminException('You need the menu.manage permission to edit the menu');
+    return MenuAdminApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: token, outletId: await _resolveOutletId());
+  }
+
+  /// Saves [m] to Supabase first and only then updates the local menu, so the
+  /// POS never shows an edit the backoffice rejected. A new item has an empty id.
+  /// Old orders keep their own copy of name and price, so they don't change.
+  Future<MenuItem> saveMenuItem(MenuItem m) async {
+    final api = await _menuAdmin();
+    final i = menu.indexWhere((x) => x.id == m.id);
+    final saved = i == -1 ? await api.createItem(m) : await api.updateItem(m, menu[i]);
+    final at = menu.indexWhere((x) => x.id == saved.id);
+    at == -1 ? menu.add(saved) : menu[at] = saved;
+    if (!categories.contains(saved.cat)) categories = [...categories, saved.cat];
+    await _saveMenu();
+    notifyListeners();
+    return saved;
+  }
+
+  Future<void> removeMenuItem(MenuItem m) async {
+    await (await _menuAdmin()).deactivateItem(m.id);
+    menu.removeWhere((x) => x.id == m.id);
+    itemOff.remove(m.id);
+    stock.remove(m.id);
+    await _saveMenu();
+    notifyListeners();
+  }
+
   // ---------- menu ----------
   MenuItem item(String id) => menu.firstWhere((m) => m.id == id);
   List<MenuItem> itemsIn(String cat) => menu.where((m) => m.cat == cat).toList();
@@ -1118,6 +1287,70 @@ class Store extends ChangeNotifier {
   // ---------- tables & parties ----------
   TableModel table(String id) => tables.firstWhere((t) => t.id == id);
   List<TableModel> tablesOn(String floor) => tables.where((t) => t.floor == floor).toList();
+
+  // ---------- floor layout ----------
+  bool _cellFree(TableModel self, int gx, int gy) {
+    for (final o in tables) {
+      if (identical(o, self) || o.floor != self.floor || o.gx == null || o.gy == null) continue;
+      if (gx < o.gx! + o.w && o.gx! < gx + self.w && gy < o.gy! + o.h && o.gy! < gy + self.h) return false;
+    }
+    return true;
+  }
+
+  /// Gives every table on [floor] that has no saved position the first free spot, row by row
+  /// across [cols] columns. Pure bookkeeping (no notify): the result is saved with the next save.
+  void placeUnplaced(String floor, int cols) {
+    for (final t in tables) {
+      if (t.floor != floor || (t.gx != null && t.gy != null)) continue;
+      final maxX = math.max(0, cols - t.w);
+      for (var y = 0;; y++) {
+        var done = false;
+        for (var x = 0; x <= maxX && !done; x++) {
+          if (_cellFree(t, x, y)) {
+            t.gx = x;
+            t.gy = y;
+            done = true;
+          }
+        }
+        if (done) break;
+      }
+    }
+  }
+
+  /// Moves [t] to cell ([gx], [gy]), kept inside the plan ([cols] x [rows] cells when given). If that
+  /// overlaps another table the nearest free cell is used; if there is none the table stays put.
+  void moveTable(TableModel t, int gx, int gy, {int? cols, int? rows}) {
+    final maxX = cols == null ? 1 << 20 : math.max(0, cols - t.w), maxY = rows == null ? 1 << 20 : math.max(0, rows - t.h);
+    gx = gx.clamp(0, maxX);
+    gy = gy.clamp(0, maxY);
+    (int, int)? best = _cellFree(t, gx, gy) ? (gx, gy) : null;
+    if (best == null) {
+      var bestD = 1 << 30;
+      for (var r = -10; r <= 10; r++) {
+        for (var c = -10; c <= 10; c++) {
+          final x = gx + c, y = gy + r;
+          if (x < 0 || y < 0 || x > maxX || y > maxY || !_cellFree(t, x, y)) continue;
+          final d = c * c + r * r;
+          if (d < bestD) {
+            bestD = d;
+            best = (x, y);
+          }
+        }
+      }
+    }
+    if (best == null) return;
+    t.gx = best.$1;
+    t.gy = best.$2;
+    notifyListeners();
+  }
+
+  /// Forgets saved positions on [floor]; tables flow back into rows automatically.
+  void resetLayout(String floor) {
+    for (final t in tables) {
+      if (t.floor == floor) t.gx = t.gy = null;
+    }
+    notifyListeners();
+  }
 
   String partyLabel(TableModel t, String key) =>
       (t.parties.length == 1 && t.parties.first.key == key && t.parties.first.pax == t.seats) ? t.id : '${t.id}·$key';
@@ -1187,6 +1420,7 @@ class Store extends ChangeNotifier {
   String previewBillNo(Order o) => o.billNo ?? 'B${_billSeq + 1}';
 
   String labelOf(Order o) {
+    if (o.held && o.heldLabel != null) return o.heldLabel!;
     if (o.type == OrderType.dineIn) return partyLabel(table(o.tableId!), o.partyKey!);
     return o.token.isEmpty ? (o.type == OrderType.takeaway ? nextTaToken : 'New') : o.token;
   }
@@ -1288,6 +1522,23 @@ class Store extends ChangeNotifier {
     final no = assignBillNo(o);
     notifyListeners();
     return no;
+  }
+
+  /// Held bills: printed, table cleared, still waiting to be settled.
+  List<Order> get heldOrders => orders.where((o) => o.held).toList()
+    ..sort((a, b) => (a.heldAt ?? a.at).compareTo(b.heldAt ?? b.at));
+
+  /// Clears the table but keeps the printed bill open for settlement later. The
+  /// order stays in [orders] (so it shows under Payments and can be settled as
+  /// usual) with its table label frozen. Returns false if it can't be held.
+  bool holdBill(Order o) {
+    if (o.type != OrderType.dineIn || !o.billed || o.isPaid || o.held || !orders.contains(o)) return false;
+    o.heldLabel = labelOf(o);
+    o.held = true;
+    o.heldAt = DateTime.now();
+    table(o.tableId!).parties.removeWhere((p) => p.orderId == o.id);
+    notifyListeners();
+    return true;
   }
 
   String? reopen(Order o) {

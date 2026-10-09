@@ -52,16 +52,18 @@ class Variant {
   final double price;
   /// KOT group for this size, overriding the product's own group.
   final String? kotGroup;
-  const Variant(this.name, this.price, {this.kotGroup});
+  /// `product_variants.id`; null for a size not saved to the backoffice yet.
+  final String? id;
+  const Variant(this.name, this.price, {this.kotGroup, this.id});
 
   @override
   bool operator ==(Object other) => other is Variant && name == other.name && price == other.price && kotGroup == other.kotGroup;
   @override
   int get hashCode => Object.hash(name, price, kotGroup);
 
-  Map<String, dynamic> toJson() => {'name': name, 'price': price, 'kotGroup': kotGroup};
+  Map<String, dynamic> toJson() => {'name': name, 'price': price, 'kotGroup': kotGroup, 'id': id};
   factory Variant.fromJson(Map<String, dynamic> j) =>
-      Variant(j['name'] as String, (j['price'] as num).toDouble(), kotGroup: j['kotGroup'] as String?);
+      Variant(j['name'] as String, (j['price'] as num).toDouble(), kotGroup: j['kotGroup'] as String?, id: j['id'] as String?);
 }
 
 class Addon {
@@ -92,6 +94,8 @@ class MenuItem {
   final List<String> kitchenNotes;
   /// KOT group id from `product_kot_groups`; null = no group (prints on the counter printer unless routed).
   final String? kotGroup;
+  /// `products.type` as stored: veg, non-veg or egg. Empty = not known, fall back to [veg].
+  final String foodType;
   const MenuItem({
     required this.id,
     required this.code,
@@ -106,7 +110,10 @@ class MenuItem {
     this.addons = const [],
     this.kitchenNotes = const [],
     this.kotGroup,
+    this.foodType = '',
   });
+
+  String get type => foodType.isNotEmpty ? foodType : (veg ? 'veg' : 'non-veg');
 
   bool get customizable => variants.isNotEmpty || addons.isNotEmpty;
   double get fromPrice => variants.isNotEmpty ? variants.first.price : price;
@@ -133,7 +140,8 @@ class MenuItem {
       listEquals(variants, other.variants) &&
       listEquals(addons, other.addons) &&
       listEquals(kitchenNotes, other.kitchenNotes) &&
-      kotGroup == other.kotGroup;
+      kotGroup == other.kotGroup &&
+      foodType == other.foodType;
 
   @override
   int get hashCode => Object.hash(id, code, cat, subCat, name, desc, price, veg, bestseller);
@@ -152,6 +160,7 @@ class MenuItem {
         'addons': addons.map((a) => a.toJson()).toList(),
         'kitchenNotes': kitchenNotes,
         'kotGroup': kotGroup,
+        'foodType': foodType,
       };
 
   factory MenuItem.fromJson(Map<String, dynamic> j) => MenuItem(
@@ -168,6 +177,7 @@ class MenuItem {
         addons: (j['addons'] as List? ?? []).map((e) => Addon.fromJson(e as Map<String, dynamic>)).toList(),
         kitchenNotes: (j['kitchenNotes'] as List? ?? []).map((e) => e as String).toList(),
         kotGroup: j['kotGroup'] as String?,
+        foodType: j['foodType'] as String? ?? '',
       );
 }
 
@@ -411,12 +421,16 @@ class Payment {
   final String method; // Cash / UPI
   final double amount;
   final double tendered;
-  const Payment(this.method, this.amount, [this.tendered = 0]);
+  /// UPI only: which of the restaurant's UPI IDs the guest paid to, and who on
+  /// the staff confirmed the money had arrived.
+  final String upiLabel, confirmedBy;
+  const Payment(this.method, this.amount, [this.tendered = 0, this.upiLabel = '', this.confirmedBy = '']);
   double get change => method == 'Cash' && tendered > amount ? tendered - amount : 0;
 
-  Map<String, dynamic> toJson() => {'method': method, 'amount': amount, 'tendered': tendered};
+  Map<String, dynamic> toJson() => {'method': method, 'amount': amount, 'tendered': tendered, 'upiLabel': upiLabel, 'confirmedBy': confirmedBy};
   factory Payment.fromJson(Map<String, dynamic> j) =>
-      Payment(j['method'] as String, (j['amount'] as num).toDouble(), (j['tendered'] as num?)?.toDouble() ?? 0);
+      Payment(j['method'] as String, (j['amount'] as num).toDouble(), (j['tendered'] as num?)?.toDouble() ?? 0,
+          j['upiLabel'] as String? ?? '', j['confirmedBy'] as String? ?? '');
 }
 
 /// Default reasons offered when settling a bill as complimentary.
@@ -474,6 +488,12 @@ class Order {
   final List<Refund> refunds = [];
   int pax;
   bool billed = false;
+  /// Bill printed and the table cleared while the guest still has to pay: the
+  /// order stays open under Payments, detached from its table ([Store.holdBill]).
+  bool held = false;
+  DateTime? heldAt;
+  /// Table label as it was when held — the table may be re-seated meanwhile.
+  String? heldLabel;
   /// When the current bill was printed (null before billing, or for bills
   /// printed before this was tracked).
   DateTime? billedAt;
@@ -539,6 +559,9 @@ class Order {
         'at': at.toIso8601String(),
         'pax': pax,
         'billed': billed,
+        'held': held,
+        'heldAt': heldAt?.toIso8601String(),
+        'heldLabel': heldLabel,
         'billNo': billNo,
         'billedAt': billedAt?.toIso8601String(),
         'dispatched': dispatched,
@@ -572,6 +595,9 @@ class Order {
       payNote: j['payNote'] as String? ?? 'Unpaid',
     )
       ..billed = j['billed'] as bool? ?? false
+      ..held = j['held'] as bool? ?? false
+      ..heldAt = DateTime.tryParse(j['heldAt'] as String? ?? '')
+      ..heldLabel = j['heldLabel'] as String?
       ..billNo = j['billNo'] as String?
       ..billedAt = DateTime.tryParse(j['billedAt'] as String? ?? '')
       ..dispatched = j['dispatched'] as bool? ?? false
@@ -696,6 +722,9 @@ class TableModel {
   /// when syncing menu/tables) — null until a menu sync has populated it.
   /// Needed by background bill sync to open a `table_sessions` row.
   String? remoteId;
+  /// Where the table sits on the floor plan, in grid cells (null until first placed).
+  /// Set by the layout editor and kept across menu syncs.
+  int? gx, gy;
   final List<Party> parties = [];
   TableModel(this.id, this.floor, this.seats, {this.w = 1, this.h = 1, this.reservedFor, this.remoteId});
   int get used => parties.fold<int>(0, (a, p) => a + p.pax);
@@ -708,6 +737,8 @@ class TableModel {
         'w': w,
         'h': h,
         'remoteId': remoteId,
+        'gx': gx,
+        'gy': gy,
         'parties': parties.map((p) => p.toJson()).toList(),
       };
   factory TableModel.fromJson(Map<String, dynamic> j) {
@@ -718,7 +749,9 @@ class TableModel {
       w: j['w'] as int? ?? 1,
       h: j['h'] as int? ?? 1,
       remoteId: j['remoteId'] as String?,
-    );
+    )
+      ..gx = j['gx'] as int?
+      ..gy = j['gy'] as int?;
     t.parties.addAll((j['parties'] as List? ?? []).map((e) => Party.fromJson(e as Map<String, dynamic>)));
     return t;
   }

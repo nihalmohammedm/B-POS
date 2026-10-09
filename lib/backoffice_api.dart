@@ -169,7 +169,8 @@ class BackofficeApi {
       final pid = p['id'] as String;
       final itemVariants = [
         for (final v in variantsByProduct[pid] ?? const []) Variant(v['name'] as String, (v['price'] as num).toDouble(),
-              kotGroup: activeGroups.contains(v['kot_group_id']) ? v['kot_group_id'] as String : null)
+              kotGroup: activeGroups.contains(v['kot_group_id']) ? v['kot_group_id'] as String : null,
+              id: v['id'] as String)
       ];
       final itemAddons = <Addon>[];
       for (final gid in groupsByProduct[pid] ?? const <String>{}) {
@@ -200,6 +201,7 @@ class BackofficeApi {
         addons: itemAddons,
         kitchenNotes: kitchenNotes,
         kotGroup: groupByProduct[pid],
+        foodType: (p['type'] as String?) ?? '',
       ));
     }
 

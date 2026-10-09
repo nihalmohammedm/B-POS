@@ -1,3 +1,38 @@
+/// One UPI ID the restaurant collects payments on. Bills carry a QR built from
+/// it (with the bill amount filled in), so the guest's app opens ready to pay.
+class UpiAccount {
+  final String id;
+  String label; // what staff see, e.g. "Counter GPay"
+  String vpa; // the UPI ID, e.g. shop@okhdfcbank
+  String payee; // name the guest's app shows; empty = [label]
+
+  UpiAccount({required this.id, required this.label, required this.vpa, this.payee = ''});
+
+  /// Loose check: something before and after one "@".
+  static bool validVpa(String v) => RegExp(r'^[\w.\-]{2,}@[A-Za-z][\w.\-]*$').hasMatch(v);
+
+  /// The deep link encoded in the QR. Any UPI app can scan it.
+  String uri(double amount, {String note = ''}) {
+    final q = <String, String>{
+      'pa': vpa,
+      'pn': payee.isEmpty ? label : payee,
+      if (amount > 0) 'am': amount.toStringAsFixed(2),
+      'cu': 'INR',
+      if (note.isNotEmpty) 'tn': note,
+    };
+    return 'upi://pay?${q.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+  }
+
+  Map<String, dynamic> toJson() => {'id': id, 'label': label, 'vpa': vpa, 'payee': payee};
+
+  factory UpiAccount.fromJson(Map<String, dynamic> j) => UpiAccount(
+        id: '${j['id'] ?? ''}',
+        label: '${j['label'] ?? ''}',
+        vpa: '${j['vpa'] ?? ''}',
+        payee: '${j['payee'] ?? ''}',
+      );
+}
+
 /// What goes on printed bills and KOTs. Read by both the on-screen preview
 /// ([ReceiptView]) and the ESC/POS renderer ([receiptBytes]), so the preview
 /// always matches the paper. Edited in Settings › Print layout.
@@ -23,7 +58,10 @@ class PrintLayout {
   bool billSplitGst; // CGST + SGST lines instead of one GST line
   bool billShowRoundOff;
   bool billShowQr;
+  List<UpiAccount> upiAccounts; // every UPI ID the restaurant uses
+  String billUpiId; // which one's QR goes on bills; empty/unknown = the first
   String billFooter;
+  String billFooterTakeaway; // extra footer lines, takeaway bills only
   bool billShowWords;
   int billCopies;
   int billTopLines; // blank lines fed before the header
@@ -69,7 +107,10 @@ class PrintLayout {
     this.billSplitGst = true,
     this.billShowRoundOff = true,
     this.billShowQr = true,
+    List<UpiAccount>? upiAccounts,
+    this.billUpiId = '',
     this.billFooter = 'Thank you! Visit again',
+    this.billFooterTakeaway = '',
     this.billShowWords = true,
     this.billCopies = 1,
     this.billTopLines = 0,
@@ -95,7 +136,13 @@ class PrintLayout {
     this.kotCopies = 1,
     this.kotTopLines = 0,
     this.kotBottomLines = 3,
-  });
+  }) : upiAccounts = upiAccounts ?? [];
+
+  /// The account whose QR is printed on bills, if any are set up.
+  UpiAccount? get billUpi {
+    if (upiAccounts.isEmpty) return null;
+    return upiAccounts.firstWhere((a) => a.id == billUpiId, orElse: () => upiAccounts.first);
+  }
 
   static const maxFeedLines = 12;
 
@@ -123,7 +170,10 @@ class PrintLayout {
         'billSplitGst': billSplitGst,
         'billShowRoundOff': billShowRoundOff,
         'billShowQr': billShowQr,
+        'upiAccounts': upiAccounts.map((a) => a.toJson()).toList(),
+        'billUpiId': billUpiId,
         'billFooter': billFooter,
+        'billFooterTakeaway': billFooterTakeaway,
         'billShowWords': billShowWords,
         'billCopies': billCopies,
         'billTopLines': billTopLines,
@@ -175,7 +225,14 @@ class PrintLayout {
       billSplitGst: b('billSplitGst', d.billSplitGst),
       billShowRoundOff: b('billShowRoundOff', d.billShowRoundOff),
       billShowQr: b('billShowQr', d.billShowQr),
+      upiAccounts: [
+        if (j['upiAccounts'] is List)
+          for (final a in j['upiAccounts'] as List)
+            if (a is Map<String, dynamic>) UpiAccount.fromJson(a),
+      ],
+      billUpiId: s('billUpiId', d.billUpiId),
       billFooter: s('billFooter', d.billFooter),
+      billFooterTakeaway: s('billFooterTakeaway', d.billFooterTakeaway),
       billShowWords: b('billShowWords', d.billShowWords),
       billCopies: i('billCopies', d.billCopies).clamp(1, 3),
       billTopLines: i('billTopLines', d.billTopLines).clamp(0, maxFeedLines),

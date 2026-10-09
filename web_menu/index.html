@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Menu</title>
+<style>
+  :root {
+    --bg: #f4f1ec; --card: #fff; --ink: #1b1b1b; --muted: #6b6b6b; --line: #e3ded6;
+    --accent: #c2410c; --accent-ink: #fff; --veg: #15803d; --nonveg: #b91c1c; --egg: #b45309;
+    --ok: #15803d; --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141312; --card: #1e1d1b; --ink: #f2efe9; --muted: #a09a90; --line: #33302b; --accent: #ea580c; }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 96px; }
+  header { padding: 18px 16px 10px; }
+  header h1 { margin: 0; font-size: 24px; letter-spacing: -.3px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  .bar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 16px 10px; border-bottom: 1px solid var(--line); }
+  .bar input[type=search] { width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); }
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding-top: 10px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 15px; font-weight: 600; cursor: pointer; }
+  .chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  main { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+  h2 { font-size: 17px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .item { display: flex; gap: 12px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; }
+  .item .info { flex: 1; min-width: 0; }
+  .item .nm { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .item .ds { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .item .pr { font-weight: 700; margin-top: 4px; }
+  .dot { width: 14px; height: 14px; border: 2px solid; border-radius: 3px; flex: none; position: relative; }
+  .dot::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: currentColor; }
+  .veg { color: var(--veg); } .non-veg, .non_veg { color: var(--nonveg); } .egg { color: var(--egg); }
+  button { font: inherit; cursor: pointer; }
+  .add { flex: none; min-width: 84px; min-height: 44px; border-radius: 10px; border: 2px solid var(--accent); background: transparent; color: var(--accent); font-weight: 800; }
+  .stepper { display: inline-flex; align-items: center; border: 2px solid var(--accent); border-radius: 10px; overflow: hidden; }
+  .stepper button { width: 44px; min-height: 44px; border: 0; background: var(--accent); color: var(--accent-ink); font-size: 22px; font-weight: 800; }
+  .stepper span { min-width: 34px; text-align: center; font-weight: 800; }
+  .cartbar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); z-index: 8; }
+  .cta { width: 100%; min-height: 54px; border: 0; border-radius: 14px; background: var(--accent); color: var(--accent-ink); font-size: 17px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; }
+  .cta[disabled] { opacity: .55; }
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 20; display: none; }
+  .sheet-bg.open { display: block; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 92vh; overflow-y: auto; background: var(--card); border-radius: 20px 20px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-width: 720px; margin: 0 auto; }
+  .sheet h3 { margin: 0 0 12px; font-size: 20px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .row label { flex: 1; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+  .row input[type=radio], .row input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+  .sub { color: var(--muted); font-size: 13px; }
+  .field { display: block; margin: 12px 0 0; font-weight: 600; font-size: 14px; }
+  .field input, .field textarea { display: block; width: 100%; margin-top: 6px; padding: 13px 14px; font: inherit; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .seg button { min-height: 48px; border: 2px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); font-weight: 700; }
+  .seg button.on { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+  .err { color: var(--bad); font-weight: 600; margin-top: 10px; min-height: 1em; }
+  .total { display: flex; justify-content: space-between; font-size: 18px; font-weight: 800; padding: 14px 0 4px; }
+  .status { text-align: center; padding: 28px 8px; }
+  .status .big { font-size: 22px; font-weight: 800; margin: 8px 0; }
+  .pill { display: inline-block; padding: 6px 14px; border-radius: 999px; font-weight: 800; font-size: 14px; color: #fff; }
+  .pending { background: #b45309; } .accepted { background: var(--ok); } .rejected, .cancelled { background: var(--bad); }
+  .empty { text-align: center; color: var(--muted); padding: 60px 16px; }
+  .link { background: none; border: 0; color: var(--accent); font-weight: 700; padding: 10px 0; }
+</style>
+</head>
+<body>
+<header><h1 id="outletName">Menu</h1><p id="outletSub"></p></header>
+<div class="bar" id="bar" hidden>
+  <input type="search" id="q" placeholder="Search the menu" autocomplete="off">
+  <div class="chips" id="chips"></div>
+</div>
+<main id="main"><div class="empty">Loading menu…</div></main>
+
+<div class="cartbar" id="cartbar" hidden>
+  <button class="cta" id="cartBtn"><span id="cartCount"></span><span>View order · <span id="cartTotal"></span></span></button>
+</div>
+<div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
+
+<script>
+// ---- Configuration -------------------------------------------------------------------------
+// The anon key is a public, read-only-by-design key (every Supabase web app ships it). All access
+// goes through the three SECURITY DEFINER functions in supabase_web_menu.sql; the key cannot read
+// any table directly. Outlet comes from the link: https://your-host/?o=OUTLETCODE[&table=12]
+const SUPABASE_URL = 'https://v2database.bollgattea.com';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3ODQ0NTc0ODQsImV4cCI6MTg5MzQ1NjAwMCwicm9sZSI6ImFub24iLCJpc3MiOiJzdXBhYmFzZSJ9.WXyhtM_v3dP2_P1BwNmVdEXHwhfQ2fHanofZ3Prn_BQ';
+const DEFAULT_OUTLET = 'BOLGATTY';
+// ---------------------------------------------------------------------------------------------
+
+const params = new URLSearchParams(location.search);
+const OUTLET = params.get('o') || DEFAULT_OUTLET;
+const TABLE_FROM_LINK = (params.get('table') || '').slice(0, 20);
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+async function rpc(fn, body) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+               'Content-Type': 'application/json', 'Content-Profile': 'bpos', 'Accept-Profile': 'bpos' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.message) || 'Something went wrong. Please try again.');
+  return data;
+}
+
+let menu = null, activeCat = 'All', cart = []; // cart line: {item, variant, mods[], qty, note}
+
+const lineUnit = (l) => (l.variant ? Number(l.variant.price) : Number(l.item.price || 0)) + l.mods.reduce((a, m) => a + Number(m.price), 0);
+const cartTotal = () => cart.reduce((a, l) => a + lineUnit(l) * l.qty, 0);
+const cartCount = () => cart.reduce((a, l) => a + l.qty, 0);
+const fromPrice = (it) => it.variants.length ? Math.min(...it.variants.map((v) => Number(v.price))) : Number(it.price || 0);
+const sameLine = (a, b) => a.item.id === b.item.id && (a.variant?.id) === (b.variant?.id) &&
+  a.mods.map((m) => m.id).sort().join() === b.mods.map((m) => m.id).sort().join();
+
+async function boot() {
+  const token = params.get('t');
+  if (token) return showStatus(token);
+  if (!OUTLET) return ($('main').innerHTML = '<div class="empty">This menu link is incomplete.</div>');
+  try {
+    menu = await rpc('web_menu', { p_outlet_code: OUTLET });
+  } catch (e) { return ($('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`); }
+  if (!menu.enabled) return ($('main').innerHTML = '<div class="empty">Online menu is not available right now.</div>');
+  document.title = menu.outlet.name + ' · Menu';
+  $('outletName').textContent = menu.outlet.name;
+  $('outletSub').textContent = [menu.outlet.address, menu.outlet.phone].filter(Boolean).join(' · ');
+  const last = store.get('bpos_last_order');
+  if (last) $('outletSub').innerHTML += (menu.outlet.address || menu.outlet.phone ? '<br>' : '') + `<a class="link" href="?t=${esc(last)}">Track my last order</a>`;
+  $('bar').hidden = false;
+  render();
+}
+
+function render() {
+  const q = $('q').value.trim().toLowerCase();
+  const cats = ['All', ...new Set(menu.items.map((i) => i.category))];
+  $('chips').innerHTML = cats.map((c) => `<button class="chip ${c === activeCat ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
+  const shown = menu.items.filter((i) => (activeCat === 'All' || i.category === activeCat) && (!q || i.name.toLowerCase().includes(q)));
+  if (!shown.length) { $('main').innerHTML = '<div class="empty">Nothing matches.</div>'; return updateBar(); }
+  let html = '', cur = null;
+  for (const it of shown) {
+    if (it.category !== cur) { cur = it.category; html += `<h2>${esc(cur)}</h2>`; }
+    const qty = cart.filter((l) => l.item.id === it.id).reduce((a, l) => a + l.qty, 0);
+    const price = it.variants.length ? 'from ' + money(fromPrice(it)) : money(it.price || 0);
+    html += `<div class="item"><div class="info"><div class="nm"><span class="dot ${esc(it.type)}"></span>${esc(it.name)}</div>
+      ${it.description ? `<div class="ds">${esc(it.description)}</div>` : ''}<div class="pr">${price}</div></div>
+      <button class="add" data-add="${esc(it.id)}">${qty ? 'Added · ' + qty : 'Add'}</button></div>`;
+  }
+  $('main').innerHTML = html;
+  updateBar();
+}
+
+function updateBar() {
+  $('cartbar').hidden = !cartCount();
+  $('cartCount').textContent = cartCount() + (cartCount() === 1 ? ' item' : ' items');
+  $('cartTotal').textContent = money(cartTotal());
+}
+
+const openSheet = (html) => { $('sheet').innerHTML = html; $('sheetBg').classList.add('open'); };
+const closeSheet = () => $('sheetBg').classList.remove('open');
+
+function addFlow(it) {
+  if (!it.variants.length && !it.modifiers.length) { addLine({ item: it, variant: null, mods: [], qty: 1 }); return; }
+  openSheet(`<h3>${esc(it.name)}</h3>
+    ${it.variants.length ? `<div class="sub">Choose one</div>` + it.variants.map((v, i) =>
+      `<div class="row"><label><input type="radio" name="var" value="${esc(v.id)}" ${i === 0 ? 'checked' : ''}> ${esc(v.name)}</label><b>${money(v.price)}</b></div>`).join('') : ''}
+    ${it.modifiers.length ? `<div class="sub" style="margin-top:14px">Add-ons (optional)</div>` + it.modifiers.map((m) =>
+      `<div class="row"><label><input type="checkbox" name="mod" value="${esc(m.id)}"> ${esc(m.name)}</label><b>+ ${money(m.price)}</b></div>`).join('') : ''}
+    <button class="cta" style="margin-top:16px" id="addOk"><span>Add to order</span><span></span></button>`);
+  $('addOk').onclick = () => {
+    const vid = document.querySelector('input[name=var]:checked')?.value;
+    const mids = [...document.querySelectorAll('input[name=mod]:checked')].map((x) => x.value);
+    addLine({ item: it, variant: it.variants.find((v) => v.id === vid) || null, mods: it.modifiers.filter((m) => mids.includes(m.id)), qty: 1 });
+    closeSheet();
+  };
+}
+
+function addLine(l) {
+  const ex = cart.find((c) => sameLine(c, l));
+  if (ex) ex.qty = Math.min(50, ex.qty + 1); else cart.push(l);
+  render();
+}
+
+function cartSheet(err = '') {
+  if (!cart.length) return closeSheet();
+  const saved = JSON.parse(store.get('bpos_customer') || '{}');
+  const type = cartSheet.type || 'dine_in';
+  openSheet(`<h3>Your order</h3>
+    ${cart.map((l, i) => `<div class="row"><div style="flex:1"><b>${esc(l.item.name)}</b>
+      <div class="sub">${esc([l.variant?.name, ...l.mods.map((m) => '+ ' + m.name)].filter(Boolean).join(' · '))}</div>
+      <div class="sub">${money(lineUnit(l))} each</div></div>
+      <div class="stepper"><button data-dec="${i}" aria-label="Less">−</button><span>${l.qty}</span><button data-inc="${i}" aria-label="More">+</button></div></div>`).join('')}
+    <div class="total"><span>Total</span><span>${money(cartTotal())}</span></div>
+    <div class="sub">Final bill with taxes is settled at the restaurant.</div>
+    <div class="seg"><button data-type="dine_in" class="${type === 'dine_in' ? 'on' : ''}">Dine In</button>
+      <button data-type="takeaway" class="${type === 'takeaway' ? 'on' : ''}">Takeaway</button></div>
+    <label class="field">Your name<input id="fName" autocomplete="name" maxlength="80" value="${esc(saved.name || '')}"></label>
+    <label class="field">Mobile number<input id="fPhone" type="tel" inputmode="numeric" autocomplete="tel" maxlength="16" value="${esc(saved.phone || '')}"></label>
+    ${type === 'dine_in' ? `<label class="field">Table number (optional)<input id="fTable" maxlength="20" value="${esc(cartSheet.table ?? TABLE_FROM_LINK)}"></label>` : ''}
+    <label class="field">Notes for the kitchen (optional)<textarea id="fNotes" rows="2" maxlength="300">${esc(cartSheet.notes || '')}</textarea></label>
+    <div class="err" id="err">${esc(err)}</div>
+    <button class="cta" id="place"><span>Place order</span><span>${money(cartTotal())}</span></button>
+    <button class="link" id="back">Keep browsing</button>`);
+}
+
+async function placeOrder() {
+  const name = $('fName').value.trim(), phone = $('fPhone').value.trim();
+  cartSheet.table = $('fTable')?.value ?? ''; cartSheet.notes = $('fNotes').value;
+  if (!name) return ($('err').textContent = 'Please enter your name.');
+  if (phone.replace(/\D/g, '').length < 10) return ($('err').textContent = 'Please enter a valid 10-digit mobile number.');
+  const btn = $('place'); btn.disabled = true; $('err').textContent = '';
+  try {
+    const res = await rpc('web_place_order', {
+      p_outlet_code: OUTLET, p_name: name, p_phone: phone, p_order_type: cartSheet.type || 'dine_in',
+      p_table: (cartSheet.type || 'dine_in') === 'dine_in' ? cartSheet.table : '', p_notes: cartSheet.notes,
+      p_items: cart.map((l) => ({ product_id: l.item.id, variant_id: l.variant?.id || null, modifier_ids: l.mods.map((m) => m.id), quantity: l.qty })),
+    });
+    store.set('bpos_customer', JSON.stringify({ name, phone }));
+    store.set('bpos_last_order', res.public_token);
+    cart = [];
+    location.href = `?t=${res.public_token}`;
+  } catch (e) { btn.disabled = false; $('err').textContent = e.message; }
+}
+
+let pollTimer;
+async function showStatus(token) {
+  $('bar').hidden = true; $('cartbar').hidden = true;
+  const load = async () => {
+    let o;
+    try { o = await rpc('web_order_status', { p_token: token }); } catch (e) { return ($('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`); }
+    if (!o) return ($('main').innerHTML = '<div class="empty">Order not found.</div>');
+    $('outletName').textContent = o.outlet_name; $('outletSub').textContent = o.outlet_phone || '';
+    const msg = { pending: 'Waiting for the restaurant to confirm…', accepted: 'Your order is confirmed and being prepared.',
+                  rejected: 'Sorry, the restaurant could not take this order.' + (o.reject_reason ? ' ' + o.reject_reason : ''),
+                  cancelled: 'This order was cancelled.' }[o.status];
+    $('main').innerHTML = `<div class="status"><span class="pill ${esc(o.status)}">${esc(o.status.toUpperCase())}</span>
+      <div class="big">Order #${o.order_number}</div><div>${esc(msg)}</div>
+      <div class="sub" style="margin-top:6px">${o.order_type === 'dine_in' ? 'Dine In' : 'Takeaway'} · ${esc(o.customer_name)}</div></div>
+      ${o.items.map((i) => `<div class="row"><div><b>${i.quantity} × ${esc(i.name)}</b><div class="sub">${esc([i.variant, ...(i.modifiers || []).map((m) => '+ ' + m.name)].filter(Boolean).join(' · '))}</div></div><b>${money(i.unit_price * i.quantity)}</b></div>`).join('')}
+      <div class="total"><span>Total</span><span>${money(o.subtotal)}</span></div>
+      <a class="link" href="?o=${encodeURIComponent(OUTLET)}">Back to menu</a>`;
+    if (o.status !== 'pending') clearInterval(pollTimer);
+  };
+  await load();
+  pollTimer = setInterval(load, 10000);
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.dataset.cat) { activeCat = t.dataset.cat; render(); }
+  else if (t.dataset.add) addFlow(menu.items.find((i) => i.id === t.dataset.add));
+  else if (t.id === 'cartBtn') cartSheet();
+  else if (t.dataset.inc != null) { const l = cart[+t.dataset.inc]; l.qty = Math.min(50, l.qty + 1); cartSheet(); render(); }
+  else if (t.dataset.dec != null) { const l = cart[+t.dataset.dec]; if (--l.qty <= 0) cart.splice(+t.dataset.dec, 1); cartSheet(); render(); }
+  else if (t.dataset.type) { store.set('bpos_customer', JSON.stringify({ name: $('fName').value, phone: $('fPhone').value })); cartSheet.table = $('fTable')?.value ?? cartSheet.table; cartSheet.notes = $('fNotes').value; cartSheet.type = t.dataset.type; cartSheet(); }
+  else if (t.id === 'place') placeOrder();
+  else if (t.id === 'back') closeSheet();
+});
+$('sheetBg').addEventListener('click', (e) => { if (e.target === $('sheetBg')) closeSheet(); });
+$('q').addEventListener('input', render);
+boot();
+</script>
+</body>
+</html>

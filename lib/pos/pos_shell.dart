@@ -5,10 +5,12 @@ import 'package:flutter/services.dart';
 import '../models.dart';
 import '../link/link_models.dart';
 import '../store.dart';
+import '../sync/web_order_api.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/printer_status.dart';
 import '../widgets/keys.dart';
+import '../widgets/receipt.dart';
 import 'kitchen_screen.dart';
 import 'order_taking.dart';
 import 'orders_screen.dart';
@@ -30,6 +32,8 @@ class _PosShellState extends State<PosShell> {
   int _gen = 0;
   StreamSubscription<(String, bool)>? _notices;
   int _requestsSeen = 0;
+  int _webSeen = 0;
+  final _webBusy = <String>{};
   String? _lastServed;
 
   @override
@@ -42,6 +46,8 @@ class _PosShellState extends State<PosShell> {
       if (mounted) toast(context, n.$1, error: n.$2);
     });
     _requestsSeen = s.billRequests.length;
+    _webSeen = s.webOrders.length;
+    s.pollWebOrders();
     _lastServed = s.servedNotices.isEmpty ? null : s.servedNotices.last.id;
   }
 
@@ -49,6 +55,81 @@ class _PosShellState extends State<PosShell> {
   void dispose() {
     _notices?.cancel();
     super.dispose();
+  }
+
+  /// "Web order #4 · Arun · Takeaway · 3 items · ₹450" with Accept / Reject. Accepting makes it a
+  /// real takeaway order and prints its KOTs; nothing reaches the kitchen before that.
+  Widget _webOrder(Store s, WebOrder w) {
+    final busy = _webBusy.contains(w.id);
+    final items = w.lines.map((l) => '${l.qty}× ${l.name}${l.variant == null ? '' : ' (${l.variant})'}').join(', ');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+      decoration: BoxDecoration(color: C.blueDeep, borderRadius: BorderRadius.circular(18)),
+      child: Row(children: [
+        const Icon(Icons.language, color: Colors.white),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text.rich(TextSpan(children: [
+              TextSpan(text: 'Web order #${w.number} · ', style: ts(16, w: w5, c: Colors.white)),
+              TextSpan(text: '${w.customer} · ${w.phone}', style: ts(16, w: w7, c: Colors.white)),
+              TextSpan(
+                  text: ' · ${w.dineIn ? 'Dine in${w.table.isEmpty ? '' : ' · Table ${w.table}'}' : 'Takeaway'} · ${inr(w.total)}',
+                  style: ts(15, c: Colors.white)),
+              TextSpan(text: '  ${elapsed(w.at)} ago', style: ts(13, c: const Color(0xDDFFFFFF))),
+            ])),
+            Text(w.notes.isEmpty ? items : '$items · Note: ${w.notes}',
+                maxLines: 2, overflow: TextOverflow.ellipsis, style: ts(14, c: const Color(0xDDFFFFFF))),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        Btn('Accept & print KOT', icon: Icons.check, height: 44, bg: Colors.white, fg: C.ink, onTap: busy ? null : () => _acceptWeb(s, w)),
+        const SizedBox(width: 8),
+        RoundIcon(Icons.close, size: 40, bg: const Color(0x33FFFFFF), fg: Colors.white, border: null, tooltip: 'Reject',
+            onTap: busy ? null : () => _rejectWeb(s, w)),
+      ]),
+    );
+  }
+
+  Future<void> _acceptWeb(Store s, WebOrder w) async {
+    setState(() => _webBusy.add(w.id));
+    try {
+      final r = await s.acceptWebOrder(w);
+      if (!mounted) return;
+      if (r == null) {
+        toast(context, 'Web order #${w.number} was already handled on another device');
+        return;
+      }
+      await printKotsWithToast(context, s, [for (final k in r.$2) ReceiptData.kot(s, r.$1, k)]);
+    } catch (e) {
+      if (mounted) toast(context, '$e', error: true);
+    } finally {
+      if (mounted) setState(() => _webBusy.remove(w.id));
+    }
+  }
+
+  Future<void> _rejectWeb(Store s, WebOrder w) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reject web order #${w.number}?'),
+        content: Text('${w.customer} will see that the restaurant could not take this order.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reject')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _webBusy.add(w.id));
+    try {
+      await s.rejectWebOrder(w);
+    } catch (e) {
+      if (mounted) toast(context, '$e', error: true);
+    } finally {
+      if (mounted) setState(() => _webBusy.remove(w.id));
+    }
   }
 
   /// "Arun is asking for the bill · Table 12" with Print bill / Dismiss.
@@ -131,6 +212,8 @@ class _PosShellState extends State<PosShell> {
     // A new bill request: an audible nudge for the cashier.
     if (s.billRequests.length > _requestsSeen) SystemSound.play(SystemSoundType.alert);
     _requestsSeen = s.billRequests.length;
+    if (s.webOrders.length > _webSeen) SystemSound.play(SystemSoundType.alert);
+    _webSeen = s.webOrders.length;
     final served = s.servedNotices.where((n) => s.orderById(n.orderId) != null).toList();
     if (served.isNotEmpty && served.last.id != _lastServed) SystemSound.play(SystemSoundType.alert);
     _lastServed = served.isEmpty ? null : served.last.id;
@@ -228,6 +311,7 @@ class _PosShellState extends State<PosShell> {
                   child: Icon(Icons.person_outline, color: Color(0xFF7A4A0C))),
             ]),
             const SizedBox(height: 18),
+            for (final w in s.webOrders) _webOrder(s, w),
             for (final r in s.billRequests) _billRequest(s, r),
             // Newest two in full; the rest fold into "Clear all" so the screen stays usable.
             for (final (i, n) in served.reversed.take(2).indexed) _served(s, n, clearAll: i == 1 && served.length > 2 ? served.length : 0),

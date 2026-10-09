@@ -24,7 +24,7 @@ class _PrintLayoutScreenState extends State<PrintLayoutScreen> {
   OrderType sampleType = OrderType.dineIn;
   final _c = <String, TextEditingController>{};
 
-  static const _fields = ['billName', 'billHeader', 'billTitlePaid', 'billTitleUnpaid', 'billFooter', 'kotTitle', 'kotCancelTitle', 'kotModifyTitle', 'kotFooter'];
+  static const _fields = ['billName', 'billHeader', 'billTitlePaid', 'billTitleUnpaid', 'billFooter', 'billFooterTakeaway', 'kotTitle', 'kotCancelTitle', 'kotModifyTitle', 'kotFooter'];
 
   @override
   void initState() {
@@ -278,11 +278,11 @@ class _PrintLayoutScreenState extends State<PrintLayoutScreen> {
           _switch('Split GST into CGST + SGST', l.billSplitGst, (v) => l.billSplitGst = v),
           _switch('Round-off line', l.billShowRoundOff, (v) => l.billShowRoundOff = v,
               sub: 'Only hides the line; the total is still rounded'),
-          _switch('Pay QR on unpaid bills', l.billShowQr, (v) => l.billShowQr = v),
         ]),
         const SizedBox(height: 14),
         _section('Footer', [
           _field('billFooter', 'Footer lines', hint: 'Thank you! Visit again', lines: 3),
+          _field('billFooterTakeaway', 'Extra footer on takeaway bills', hint: 'Please check your order before leaving', lines: 3),
           _switch('Amount in words', l.billShowWords, (v) => l.billShowWords = v),
         ]),
       ];

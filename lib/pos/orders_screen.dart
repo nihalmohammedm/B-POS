@@ -284,6 +284,8 @@ class OrderDetail extends StatelessWidget {
                       settleFlow(context, o, print: false);
                     case 'reopen':
                       reopenFlow(context, o);
+                    case 'hold':
+                      holdBillFlow(context, o);
                     case 'cancel':
                       cancelOrderFlow(context, o);
                   }
@@ -293,7 +295,8 @@ class OrderDetail extends StatelessWidget {
                   if (kot != null) const PopupMenuItem(value: 'kot', child: Text('Reprint KOT')),
                   const PopupMenuItem(value: 'bill', child: Text('Print bill')),
                   if (_isSettleStage(o, st)) const PopupMenuItem(value: 'settle_no_print', child: Text('Settle without printing')),
-                  if (o.billed && !o.isPaid) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
+                  if (o.billed && !o.isPaid && !o.held) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
+                  if (o.type == OrderType.dineIn && !o.isPaid && !o.held) const PopupMenuItem(value: 'hold', child: Text('Hold bill')),
                   PopupMenuItem(
                       value: 'cancel',
                       enabled: s.canCancel(o),

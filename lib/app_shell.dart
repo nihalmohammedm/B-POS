@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'link/captain_link.dart';
 import 'link/link_models.dart';
 import 'link/pos_host.dart';
@@ -53,9 +54,41 @@ class _BposAppState extends State<BposApp> {
       title: widget.title,
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
-      home: widget.home,
+      home: _ExitGuard(child: widget.home),
     );
     if (_link != null) app = CaptainLinkScope(link: _link!, child: app);
     return StoreScope(store: store, child: app);
+  }
+}
+
+/// Wraps the root screen so the system back button can't close the app by accident
+/// (a stray swipe on a till or kitchen phone would drop the live session): the first
+/// press shows a hint, a second within two seconds exits. Pushed screens pop as normal.
+class _ExitGuard extends StatefulWidget {
+  final Widget child;
+  const _ExitGuard({required this.child});
+  @override
+  State<_ExitGuard> createState() => _ExitGuardState();
+}
+
+class _ExitGuardState extends State<_ExitGuard> {
+  DateTime? _lastBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final now = DateTime.now();
+        if (_lastBack != null && now.difference(_lastBack!) < const Duration(seconds: 2)) {
+          SystemNavigator.pop();
+          return;
+        }
+        _lastBack = now;
+        toast(context, 'Press back again to exit');
+      },
+      child: widget.child,
+    );
   }
 }

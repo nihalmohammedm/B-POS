@@ -1164,7 +1164,7 @@ class Store extends ChangeNotifier {
       menu
         ..clear()
         ..addAll(result.items);
-      if (result.categories.isNotEmpty) categories = result.categories;
+      categories = result.categories;
       kotGroups = result.kotGroups;
       if (result.outlet.name.isNotEmpty) outletName = result.outlet.name;
       outletAddress = result.outlet.address;

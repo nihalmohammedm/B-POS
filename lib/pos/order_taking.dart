@@ -345,45 +345,106 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         ]),
       ),
       const SliverToBoxAdapter(child: SizedBox(height: 16)),
-      SliverGrid(
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 200, mainAxisExtent: 104, crossAxisSpacing: 12, mainAxisSpacing: 12),
-        delegate: SliverChildListDelegate([_catTile(s, null), for (final c in s.categories) _catTile(s, c)]),
-      ),
-      if (cat != null && s.subCatsIn(cat!).isNotEmpty)
+      if (cat == null)
+        SliverGrid(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 200, mainAxisExtent: 104, crossAxisSpacing: 12, mainAxisSpacing: 12),
+          delegate: SliverChildListDelegate([_catTile(s, null), for (final c in s.categories) _catTile(s, c)]),
+        )
+      else
+        // A category is open: shrink the tiles to a slim strip so the items get the space.
         SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
-            child: SizedBox(
-              height: 34,
-              child: ListView(scrollDirection: Axis.horizontal, children: [
-                _subCatTab('All', subCat == null, () => setState(() => subCat = null)),
-                for (final sc in s.subCatsIn(cat!)) _subCatTab(sc, subCat == sc, () => setState(() => subCat = sc)),
-              ]),
-            ),
+          child: SizedBox(
+            height: 46,
+            child: ListView(scrollDirection: Axis.horizontal, children: [
+              _catChip(s, null),
+              for (final c in s.categories) _catChip(s, c),
+            ]),
           ),
         ),
       SliverToBoxAdapter(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 22, 4, 12),
+          padding: const EdgeInsets.fromLTRB(4, 18, 4, 12),
           child: Row(children: [
-            Text(subCat ?? cat ?? 'All items', style: ts(18, w: w5)),
+            Text(cat ?? 'All items', style: ts(18, w: w5)),
             const SizedBox(width: 8),
             Text('${items.length}', style: ts(14, c: C.muted)),
           ]),
         ),
       ),
-      SliverGrid(
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 250, mainAxisExtent: 176, crossAxisSpacing: 12, mainAxisSpacing: 12),
-        delegate: SliverChildBuilderDelegate((c, i) => _itemCard(s, items[i], qtyBy[items[i].id] ?? 0), childCount: items.length),
-      ),
+      ..._itemSlivers(s, items, qtyBy),
       if (items.isEmpty)
         SliverToBoxAdapter(
             child: Padding(
                 padding: const EdgeInsets.all(40), child: Center(child: Text('No items match', style: ts(14, c: C.muted))))),
       SliverToBoxAdapter(child: SizedBox(height: wide ? 12 : 96)),
     ]);
+  }
+
+  /// Items as one grid, or — inside a category that has sub-categories — as groups, each under
+  /// its sub-category name (items without one come first, unlabelled).
+  List<Widget> _itemSlivers(Store s, List<MenuItem> items, Map<String, int> qtyBy) {
+    SliverGrid grid(List<MenuItem> list) => SliverGrid(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 250, mainAxisExtent: 176, crossAxisSpacing: 12, mainAxisSpacing: 12),
+          delegate: SliverChildBuilderDelegate((c, i) => _itemCard(s, list[i], qtyBy[list[i].id] ?? 0), childCount: list.length),
+        );
+    if (cat == null || s.subCatsIn(cat!).isEmpty) return [grid(items)];
+    final out = <Widget>[];
+    final loose = items.where((m) => m.subCat.isEmpty).toList();
+    if (loose.isNotEmpty) out.add(grid(loose));
+    final subs = [...s.subCatsIn(cat!)]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    for (final sc in subs) {
+      final list = items.where((m) => m.subCat == sc).toList();
+      if (list.isEmpty) continue;
+      out.add(SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 20, 4, 10),
+          child: Row(children: [
+            Text(sc, style: ts(15, w: w6, c: C.ink2)),
+            const SizedBox(width: 8),
+            Text('${list.length}', style: ts(13, c: C.muted)),
+            const SizedBox(width: 12),
+            const Expanded(child: Divider(height: 1, color: C.line)),
+          ]),
+        ),
+      ));
+      out.add(grid(list));
+    }
+    return out;
+  }
+
+  Widget _catChip(Store s, String? c) {
+    final on = cat == c;
+    final off = c != null && s.catOff.contains(c);
+    final color = c == null ? C.ink : (off ? const Color(0xFFB5B5B5) : colorForCategory(c).$1);
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Material(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() {
+            cat = on ? null : c;
+            subCat = null;
+          }),
+          onLongPress: c == null ? null : () => showCategoryManage(context, c, onAdd: add),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12), border: Border.all(color: on ? Colors.white : Colors.transparent, width: 3)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(c ?? 'All', style: ts(14, w: w5, c: Colors.white)),
+              const SizedBox(width: 6),
+              Text('${c == null ? s.menu.length : s.itemsIn(c).length}', style: ts(12, c: const Color(0xDDFFFFFF))),
+              if (off) ...[const SizedBox(width: 6), const Pill('OFF', bg: Colors.white, fg: C.ink2, size: 10)],
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _catTile(Store s, String? c) {
@@ -428,20 +489,6 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       ),
     );
   }
-
-  // Plain text tab, not a bordered pill — subcategories read as a list under
-  // their parent category, not as another row of category-style cards.
-  Widget _subCatTab(String label, bool on, VoidCallback onTap) => Padding(
-        padding: const EdgeInsets.only(right: 22),
-        child: InkWell(
-          onTap: onTap,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(label, style: ts(14, w: on ? w6 : w5, c: on ? C.ink : C.muted)),
-            const SizedBox(height: 6),
-            Container(height: 2, width: 18, color: on ? C.ink : Colors.transparent),
-          ]),
-        ),
-      );
 
   Widget _itemCard(Store s, MenuItem m, int qty) {
     final reason = s.offReason(m);

@@ -57,9 +57,19 @@ class BackofficeApi {
       phone: outletRow['phone'] as String? ?? '',
     );
 
+    // Only the active menu version is live; rows from archived/draft versions must not show.
+    final vers = await _get('menu_versions', {'select': 'id', 'outlet_id': 'eq.$outletId', 'status': 'eq.active', 'limit': '1'});
+    final versionId = vers.isEmpty ? null : vers.first['id'] as String;
+    // Rows with no version (pre-versioning data) stay visible. If no active version is readable
+    // (none exists, or RLS hides menu_versions) we can't scope, so fall back to the outlet's rows.
+    final versionFilter = <String, String>{
+      if (versionId != null) 'or': '(menu_version_id.eq.$versionId,menu_version_id.is.null)',
+    };
+
     final cats = await _get('categories', {
       'select': 'id,name,display_order,parent_id',
       'outlet_id': 'eq.$outletId',
+      ...versionFilter,
       'is_active': 'eq.true',
       'order': 'display_order.asc',
     });
@@ -102,6 +112,7 @@ class BackofficeApi {
     final products = await _get('products', {
       'select': '*',
       'outlet_id': 'eq.$outletId',
+      ...versionFilter,
       'is_active': 'eq.true',
       'order': 'display_order.asc',
     });
@@ -205,6 +216,8 @@ class BackofficeApi {
       ));
     }
 
-    return BackofficeMenu(categoryNames, items, outlet, tables, kotGroups);
+    // An uploaded menu can leave categories no product points at; showing them gives dead tiles.
+    final used = {for (final i in items) i.cat};
+    return BackofficeMenu([for (final c in categoryNames) if (used.contains(c)) c], items, outlet, tables, kotGroups);
   }
 }

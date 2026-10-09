@@ -1166,6 +1166,7 @@ class Store extends ChangeNotifier {
         ..addAll(result.items);
       categories = result.categories;
       kotGroups = result.kotGroups;
+      subCatTree = result.subCats;
       if (result.outlet.name.isNotEmpty) outletName = result.outlet.name;
       outletAddress = result.outlet.address;
       outletPhone = result.outlet.phone;
@@ -1249,6 +1250,15 @@ class Store extends ChangeNotifier {
       for (final m in itemsIn(cat))
         if (m.subCat.isNotEmpty && seen.add(m.subCat)) m.subCat,
     ];
+  }
+
+  /// Sub-categories known for [cat] from the last sync, including empty ones, so a new item can be
+  /// filed under one. Falls back to those in use when offline / not yet synced.
+  Map<String, List<String>> subCatTree = {};
+  List<String> subCatChoices(String cat) {
+    final seen = <String>{};
+    return [for (final n in [...(subCatTree[cat] ?? const <String>[]), ...subCatsIn(cat)]) if (seen.add(n)) n]
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   }
 
   String? offReason(MenuItem m) {

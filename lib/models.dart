@@ -96,6 +96,8 @@ class MenuItem {
   final String? kotGroup;
   /// `products.type` as stored: veg, non-veg or egg. Empty = not known, fall back to [veg].
   final String foodType;
+  /// Packaged item sold at its printed price (`products.is_mrp`): takeaway adds no parcel charge for it.
+  final bool isMrp;
   const MenuItem({
     required this.id,
     required this.code,
@@ -111,6 +113,7 @@ class MenuItem {
     this.kitchenNotes = const [],
     this.kotGroup,
     this.foodType = '',
+    this.isMrp = false,
   });
 
   String get type => foodType.isNotEmpty ? foodType : (veg ? 'veg' : 'non-veg');
@@ -141,7 +144,8 @@ class MenuItem {
       listEquals(addons, other.addons) &&
       listEquals(kitchenNotes, other.kitchenNotes) &&
       kotGroup == other.kotGroup &&
-      foodType == other.foodType;
+      foodType == other.foodType &&
+      isMrp == other.isMrp;
 
   @override
   int get hashCode => Object.hash(id, code, cat, subCat, name, desc, price, veg, bestseller);
@@ -161,6 +165,7 @@ class MenuItem {
         'kitchenNotes': kitchenNotes,
         'kotGroup': kotGroup,
         'foodType': foodType,
+        'isMrp': isMrp,
       };
 
   factory MenuItem.fromJson(Map<String, dynamic> j) => MenuItem(
@@ -178,6 +183,7 @@ class MenuItem {
         kitchenNotes: (j['kitchenNotes'] as List? ?? []).map((e) => e as String).toList(),
         kotGroup: j['kotGroup'] as String?,
         foodType: j['foodType'] as String? ?? '',
+        isMrp: j['isMrp'] as bool? ?? false,
       );
 }
 
@@ -513,6 +519,11 @@ class Order {
   /// amount or % of subtotal) — see Store.setDiscount.
   double discountAmount = 0;
   String? discountReason;
+  /// Takeaway parcel charge per non-MRP item, frozen on the order. 0 for delivery/dine-in and for
+  /// orders saved before the charge existed, so history never changes.
+  double parcelRate = 0;
+  /// Parcel charge typed in by staff for the whole order; replaces rate × items when set.
+  double? parcelOverride;
 
   Order({
     required this.id,
@@ -534,7 +545,12 @@ class Order {
   /// this, not the raw subtotal, so a discount also reduces tax collected.
   double get discountedSubtotal => (subtotal - discountAmount).clamp(0, subtotal);
   double get tax => discountedSubtotal * 0.05;
-  double get fee => type == OrderType.delivery ? 40 : 0;
+  /// Parcel charge: [parcelRate] × units of non-MRP items still live on a takeaway order.
+  double get parcelCharge => type == OrderType.takeaway
+      ? parcelOverride ?? parcelRate * lines.where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.activeQty)
+      : 0;
+  double get fee => type == OrderType.delivery ? 40 : parcelCharge;
+  String get feeLabel => type == OrderType.delivery ? 'Delivery charge' : 'Parcel charge';
   double get raw => discountedSubtotal + tax + fee;
   double get total => raw.roundToDouble();
   /// Lines with anything left after cancellations.
@@ -577,6 +593,8 @@ class Order {
         'complimentaryReason': complimentaryReason,
         'discountAmount': discountAmount,
         'discountReason': discountReason,
+        'parcelRate': parcelRate,
+        'parcelOverride': parcelOverride,
       };
 
   factory Order.fromJson(Map<String, dynamic> j) {
@@ -606,7 +624,9 @@ class Order {
       ..complimentary = j['complimentary'] as bool? ?? false
       ..complimentaryReason = j['complimentaryReason'] as String?
       ..discountAmount = (j['discountAmount'] as num?)?.toDouble() ?? 0
-      ..discountReason = j['discountReason'] as String?;
+      ..discountReason = j['discountReason'] as String?
+      ..parcelRate = (j['parcelRate'] as num?)?.toDouble() ?? 0
+      ..parcelOverride = (j['parcelOverride'] as num?)?.toDouble();
     o.lines.addAll((j['lines'] as List? ?? []).map((e) => OrderLine.fromJson(e as Map<String, dynamic>)));
     o.payments.addAll((j['payments'] as List? ?? []).map((e) => Payment.fromJson(e as Map<String, dynamic>)));
     o.cancellations

@@ -156,6 +156,8 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
   final sizes = [for (final v in existing?.variants ?? const <Variant>[]) _SizeRow(v)];
   var cat = existing?.cat ?? (s.categories.isNotEmpty ? s.categories.first : '');
   var type = existing?.type ?? 'veg';
+  var isMrp = existing?.isMrp ?? false;
+  var subCat = existing?.subCat ?? '';
   String? group = existing?.kotGroup;
   var busy = false;
 
@@ -183,7 +185,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           id: existing?.id ?? '',
           code: codeC.text.trim(),
           cat: cat,
-          subCat: existing?.subCat ?? '',
+          subCat: subCat,
           name: nameC.text.trim(),
           desc: descC.text.trim(),
           price: vs.isNotEmpty ? vs.first.price : parse(priceC)!,
@@ -194,6 +196,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           kitchenNotes: existing?.kitchenNotes ?? const [],
           kotGroup: group,
           foodType: type,
+          isMrp: isMrp,
         );
         set(() => busy = true);
         try {
@@ -263,8 +266,27 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           DropdownButtonFormField<String>(
             initialValue: s.categories.contains(cat) ? cat : null,
             items: [for (final c in s.categories) DropdownMenuItem(value: c, child: Text(c, style: ts(14)))],
-            onChanged: ro ? null : (v) => set(() => cat = v ?? cat),
+            onChanged: ro
+                ? null
+                : (v) => set(() {
+                      if (v != cat) subCat = '';
+                      cat = v ?? cat;
+                    }),
           ),
+          if (s.subCatChoices(cat).isNotEmpty) ...[
+            const SizedBox(height: 14),
+            const Label('Sub-category'),
+            const SizedBox(height: 6),
+            DropdownButtonFormField<String>(
+              key: ValueKey('sub-$cat'),
+              initialValue: s.subCatChoices(cat).contains(subCat) ? subCat : '',
+              items: [
+                DropdownMenuItem(value: '', child: Text('None', style: ts(14, c: C.muted))),
+                for (final c in s.subCatChoices(cat)) DropdownMenuItem(value: c, child: Text(c, style: ts(14))),
+              ],
+              onChanged: ro ? null : (v) => set(() => subCat = v ?? ''),
+            ),
+          ],
           const SizedBox(height: 14),
           const Label('Type'),
           const SizedBox(height: 6),
@@ -275,7 +297,15 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
               onChanged: (v) {
                 if (!ro) set(() => type = v);
               }),
-          const SizedBox(height: 14),
+          const SizedBox(height: 6),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('MRP item', style: ts(14, w: w5)),
+            subtitle: Text('Packaged, sold at printed price · no takeaway parcel charge', style: ts(12, c: C.muted)),
+            value: isMrp,
+            onChanged: ro ? null : (v) => set(() => isMrp = v),
+          ),
+          const SizedBox(height: 8),
           const Label('KOT group'),
           const SizedBox(height: 6),
           DropdownButtonFormField<String?>(

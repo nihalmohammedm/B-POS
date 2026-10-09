@@ -20,7 +20,9 @@ class BackofficeMenu {
   final OutletInfo outlet;
   final List<TableModel> tables;
   final List<KotGroup> kotGroups;
-  BackofficeMenu(this.categories, this.items, this.outlet, this.tables, this.kotGroups);
+  /// Top-level category name -> its sub-category names (including ones with no items yet).
+  final Map<String, List<String>> subCats;
+  BackofficeMenu(this.categories, this.items, this.outlet, this.tables, this.kotGroups, [this.subCats = const {}]);
 }
 
 /// Talks to the `bpos` schema of a self-hosted Supabase/PostgREST backend.
@@ -78,6 +80,12 @@ class BackofficeApi {
     // shows up as a chip inside its parent on the POS, not as its own top-level tile.
     final parentIdByCat = {for (final c in cats) c['id'] as String: c['parent_id'] as String?};
     final categoryNames = [for (final c in cats) if (c['parent_id'] == null) c['name'] as String];
+    final subCatsByParent = <String, List<String>>{};
+    for (final c in cats) {
+      final pid = c['parent_id'] as String?;
+      final parent = pid == null ? null : catNameById[pid];
+      if (parent != null) subCatsByParent.putIfAbsent(parent, () => []).add(c['name'] as String);
+    }
 
     // No floor/section or shape column exists yet, so every synced table lands in one flat
     // group and its tile shape is inferred from seat count: small tables render as a square,
@@ -116,7 +124,7 @@ class BackofficeApi {
       'is_active': 'eq.true',
       'order': 'display_order.asc',
     });
-    if (products.isEmpty) return BackofficeMenu(categoryNames, [], outlet, tables, kotGroups);
+    if (products.isEmpty) return BackofficeMenu(categoryNames, [], outlet, tables, kotGroups, subCatsByParent);
     final productIds = [for (final p in products) p['id'] as String];
     final idsIn = 'in.(${productIds.join(',')})';
 
@@ -212,12 +220,13 @@ class BackofficeApi {
         addons: itemAddons,
         kitchenNotes: kitchenNotes,
         kotGroup: groupByProduct[pid],
-        foodType: (p['type'] as String?) ?? '',
+        foodType: ((p['type'] as String?) ?? '').replaceAll('_', '-'),
+        isMrp: p['is_mrp'] as bool? ?? false,
       ));
     }
 
     // An uploaded menu can leave categories no product points at; showing them gives dead tiles.
     final used = {for (final i in items) i.cat};
-    return BackofficeMenu([for (final c in categoryNames) if (used.contains(c)) c], items, outlet, tables, kotGroups);
+    return BackofficeMenu([for (final c in categoryNames) if (used.contains(c)) c], items, outlet, tables, kotGroups, subCatsByParent);
   }
 }

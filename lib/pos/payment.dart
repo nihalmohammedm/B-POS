@@ -682,7 +682,7 @@ Future<void> settleFlow(BuildContext context, Order o,
         subtitle:
             '${s.titleOf(o)} · Subtotal ${inr(o.subtotal, decimals: true)}'
             '${o.discountAmount > 0 ? ' · Discount -${inr(o.discountAmount, decimals: true)}' : ''}'
-            ' · Tax ${inr(o.tax, decimals: true)}${o.fee > 0 ? ' · Delivery ${inr(o.fee)}' : ''}',
+            ' · Tax ${inr(o.tax, decimals: true)}${o.fee > 0 ? ' · ${o.type == OrderType.delivery ? 'Delivery' : 'Parcel'} ${inr(o.fee)}' : ''}',
         total: o.total,
         subtotal: o.subtotal,
         currentDiscount: o.discountAmount,

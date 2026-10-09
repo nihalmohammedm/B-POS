@@ -28,6 +28,7 @@ class ReceiptData {
   final DateTime at;
   final List<ReceiptLine> lines;
   final double fee;
+  final String feeLabel;
   /// Bill only: flat ₹ knocked off the subtotal before tax, and why.
   final double discount;
   final String discountReason;
@@ -60,6 +61,7 @@ class ReceiptData {
     this.businessPhone = '',
     this.customer = '',
     this.fee = 0,
+    this.feeLabel = 'Delivery charge',
     this.discount = 0,
     this.discountReason = '',
     this.payments = const [],
@@ -132,6 +134,7 @@ class ReceiptData {
       at: DateTime.now(),
       customer: [o.customer, o.phone].where((x) => x.isNotEmpty).join(' · '),
       fee: o.fee,
+      feeLabel: o.feeLabel,
       discount: o.discountAmount,
       discountReason: o.discountReason ?? '',
       payments: payments ?? o.payments,
@@ -384,7 +387,7 @@ class ReceiptView extends StatelessWidget {
         _kv('SGST @2.5%', _n(t.tax / 2)),
       ] else
         _kv('GST @5%', _n(t.tax)),
-      if (d.fee > 0) _kv('Delivery charge', _n(d.fee)),
+      if (d.fee > 0) _kv(d.feeLabel, _n(d.fee)),
       if (l.billShowRoundOff) _kv('Round off', '${t.round >= 0 ? '+' : '-'}${_n(t.round.abs())}'),
       const _Dash(),
       _kv('TOTAL', inr(t.total, decimals: true), s: 18, w: FontWeight.w700),
@@ -650,7 +653,7 @@ Future<List<int>> receiptBytes(ReceiptData d, {PrintLayout? layout}) async {
       } else {
         kv('GST @5%', n(tot.tax));
       }
-      if (d.fee > 0) kv('Delivery charge', n(d.fee));
+      if (d.fee > 0) kv(d.feeLabel, n(d.fee));
       if (l.billShowRoundOff) kv('Round off', '${tot.round >= 0 ? '+' : '-'}${n(tot.round.abs())}');
       t.text(dash);
       kv('TOTAL', 'Rs.${n(tot.total)}', tall);

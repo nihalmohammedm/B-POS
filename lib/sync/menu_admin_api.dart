@@ -45,36 +45,53 @@ class MenuAdminApi {
   /// PATCH that must hit a row: with RLS a blocked update matches zero rows and
   /// still answers 200, so ask for the rows back and treat none as "not allowed".
   Future<void> _patch(String path, Map<String, String> qp, Map<String, dynamic> body) async {
-    final r = await http
+    var r = await http
         .patch(_u(path, qp), headers: _headers(write: true, prefer: 'return=representation'), body: jsonEncode(body))
         .timeout(const Duration(seconds: 15));
+    if (r.statusCode >= 300 && _missingMrp(r, body)) {
+      // supabase_mrp_items.sql hasn't been run yet: save everything else.
+      r = await http
+          .patch(_u(path, qp), headers: _headers(write: true, prefer: 'return=representation'), body: jsonEncode(body..remove('is_mrp')))
+          .timeout(const Duration(seconds: 15));
+    }
     if (r.statusCode >= 300) _fail(path, r);
     if ((jsonDecode(r.body) as List).isEmpty) {
       throw MenuAdminException('$path: nothing was changed. You may not have permission to manage this outlet\'s menu.', statusCode: 403);
     }
   }
 
+  bool _missingMrp(http.Response r, Map<String, dynamic> body) => body.containsKey('is_mrp') && r.body.contains('is_mrp');
+
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body) async {
-    final r = await http
+    var r = await http
         .post(_u(path), headers: _headers(write: true, prefer: 'return=representation'), body: jsonEncode(body))
         .timeout(const Duration(seconds: 15));
+    if (r.statusCode >= 300 && _missingMrp(r, body)) {
+      r = await http
+          .post(_u(path), headers: _headers(write: true, prefer: 'return=representation'), body: jsonEncode(body..remove('is_mrp')))
+          .timeout(const Duration(seconds: 15));
+    }
     if (r.statusCode >= 300) _fail(path, r);
     return (jsonDecode(r.body) as List).first as Map<String, dynamic>;
   }
 
   /// Category id for [name]: a top-level one unless [sub] (a child of something).
-  Future<String> _categoryId(String name, {bool sub = false}) async {
+  Future<String> _categoryId(String name, {String? parent}) async {
     final rows = await _get('categories', {
       'select': 'id,parent_id',
       'outlet_id': 'eq.$outletId',
       'name': 'eq.$name',
       'is_active': 'eq.true',
     });
+    final parentId = parent == null ? null : await _categoryId(parent);
     for (final c in rows) {
-      if ((c['parent_id'] == null) != sub) return c['id'] as String;
+      if (c['parent_id'] == parentId) return c['id'] as String;
     }
     throw MenuAdminException('Category "$name" was not found for this outlet');
   }
+
+  /// The category row an item is filed under: its sub-category when it has one.
+  Future<String> _filingId(MenuItem m) => m.subCat.isEmpty ? _categoryId(m.cat) : _categoryId(m.subCat, parent: m.cat);
 
   Map<String, dynamic> _productRow(MenuItem m, String categoryId) => {
         'item_code': m.code,
@@ -83,7 +100,9 @@ class MenuAdminApi {
         'category_id': categoryId,
         'base_price': m.price,
         'has_variants': m.variants.isNotEmpty,
-        'type': m.type,
+        // The database spells it non_veg; the app uses non-veg.
+        'type': m.type.replaceAll('-', '_'),
+        'is_mrp': m.isMrp,
       };
 
   Future<void> _setKotGroup(String productId, String? groupId) async {
@@ -121,19 +140,18 @@ class MenuAdminApi {
   /// Saves an existing item. [before] is what the POS had, used to know which
   /// sizes were removed and whether the KOT group changed. Returns the item as saved.
   Future<MenuItem> updateItem(MenuItem m, MenuItem before) async {
-    final keepsSub = m.subCat.isNotEmpty && m.cat == before.cat && m.subCat == before.subCat;
-    final catId = keepsSub ? await _categoryId(m.subCat, sub: true) : await _categoryId(m.cat);
+    final catId = await _filingId(m);
     await _patch('products', {'id': 'eq.${m.id}', 'outlet_id': 'eq.$outletId'}, _productRow(m, catId));
     final variants = await _syncVariants(m.id, m.variants, before.variants);
     if (m.kotGroup != before.kotGroup) await _setKotGroup(m.id, m.kotGroup);
-    return _copy(m, m.id, variants, keepsSub ? m.subCat : '');
+    return _copy(m, m.id, variants, m.subCat);
   }
 
   /// Adds a new item to the outlet's active menu version.
   Future<MenuItem> createItem(MenuItem m) async {
     final ver = await _get('menu_versions', {'select': 'id', 'outlet_id': 'eq.$outletId', 'status': 'eq.active', 'limit': '1'});
     if (ver.isEmpty) throw MenuAdminException('This outlet has no active menu version to add the item to');
-    final catId = await _categoryId(m.cat);
+    final catId = await _filingId(m);
     final last = await _get('products', {
       'select': 'display_order',
       'outlet_id': 'eq.$outletId',
@@ -151,7 +169,7 @@ class MenuAdminApi {
     final id = r['id'] as String;
     final variants = await _syncVariants(id, m.variants, const []);
     if (m.kotGroup != null) await _setKotGroup(id, m.kotGroup);
-    return _copy(m, id, variants, '');
+    return _copy(m, id, variants, m.subCat);
   }
 
   /// Takes an item off the menu. Kept in the database (inactive) so past

@@ -32,6 +32,27 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   Order? existing;
   bool _sheetOpen = false;
   final nameC = TextEditingController(), phoneC = TextEditingController(), addrC = TextEditingController();
+  // Delivery defaults: shown pre-filled, and wiped the moment a field is tapped so staff
+  // type straight over them instead of deleting first.
+  static const _defName = 'Swiggy', _defAddr = 'Swiggy', _defPhone = '0000000000';
+  late final nameF = _clearOnFocus(nameC, _defName),
+      phoneF = _clearOnFocus(phoneC, _defPhone),
+      addrF = _clearOnFocus(addrC, _defAddr);
+  // Takeaway parcel charge: ₹5 per non-MRP item by default, and the total is what staff can edit.
+  static const _parcelPerItem = 5.0;
+  final parcelC = TextEditingController();
+  bool _parcelEdited = false;
+  double get _parcelAuto {
+    final prior = existing?.liveLines ?? const <OrderLine>[];
+    return _parcelPerItem * [...prior, ...cart].where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.qty);
+  }
+
+  double get _parcelAmount => type != OrderType.takeaway
+      ? 0
+      : _parcelEdited
+          ? (double.tryParse(parcelC.text.trim()) ?? 0)
+          : _parcelAuto;
+  double? get _parcelOverride => type == OrderType.takeaway && _parcelEdited ? _parcelAmount : null;
   final searchC = TextEditingController();
   final searchF = FocusNode(debugLabel: 'menu search');
   final cart = <OrderLine>[];
@@ -54,11 +75,23 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         partyKey = t.partyKey;
       } else {
         existing = t;
+        if (t.parcelOverride != null) {
+          _parcelEdited = true;
+          parcelC.text = t.parcelOverride!.toStringAsFixed(0);
+        }
         nameC.text = t.customer;
         phoneC.text = t.phone;
         addrC.text = t.address;
       }
     }
+  }
+
+  FocusNode _clearOnFocus(TextEditingController c, String def) {
+    final f = FocusNode();
+    f.addListener(() {
+      if (f.hasFocus && c.text == def) c.clear();
+    });
+    return f;
   }
 
   /// Most delivery orders come through Swiggy, so switching to Delivery
@@ -68,8 +101,9 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     type = t;
     existing = null;
     if (t == OrderType.delivery) {
-      if (nameC.text.trim().isEmpty) nameC.text = 'Swiggy';
-      if (addrC.text.trim().isEmpty) addrC.text = 'Swiggy';
+      if (nameC.text.trim().isEmpty) nameC.text = _defName;
+      if (addrC.text.trim().isEmpty) addrC.text = _defAddr;
+      if (phoneC.text.trim().isEmpty) phoneC.text = _defPhone;
     }
   }
 
@@ -78,6 +112,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     nameC.dispose();
     phoneC.dispose();
     addrC.dispose();
+    parcelC.dispose();
+    nameF.dispose();
+    phoneF.dispose();
+    addrF.dispose();
     searchC.dispose();
     searchF.dispose();
     _tick.dispose();
@@ -160,7 +198,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     List<Payment>? pays;
     if (payNow) {
       // What the invoice will total: anything already on the order plus this cart.
-      final whole = Order(id: 0, type: type)..lines.addAll([for (final l in [...o.liveLines, ...cart]) l.copy()]);
+      final whole = Order(id: 0, type: type)
+        ..parcelRate = type == OrderType.takeaway ? _parcelPerItem : 0
+        ..parcelOverride = _parcelOverride
+        ..lines.addAll([for (final l in [...o.liveLines, ...cart]) l.copy()]);
       pays = await showPaymentDialog(context,
           title: 'Take payment · ${nameC.text.trim().isEmpty ? type.label : nameC.text.trim()}',
           subtitle: '${whole.itemCount} items · the order stays open until it\'s handed over',
@@ -171,8 +212,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     if (type != OrderType.dineIn) {
       o
         ..customer = nameC.text.trim()
-        ..phone = phoneC.text.trim()
-        ..address = addrC.text.trim();
+        ..phone = phoneC.text.trim() == _defPhone ? '' : phoneC.text.trim()
+        ..address = addrC.text.trim()
+        ..parcelRate = type == OrderType.takeaway ? _parcelPerItem : 0
+        ..parcelOverride = _parcelOverride;
     }
     final ks = s.sendKot(o, cart);
     final kotData = [for (final k in ks) ReceiptData.kot(s, o, k)];
@@ -603,7 +646,12 @@ class _OrderTakingState extends State<OrderTakingScreen> {
 
   Widget _cartPanel(Store s) {
     final sub = cart.fold<double>(0, (a, l) => a + l.total);
-    final fee = type == OrderType.delivery ? 40.0 : 0.0;
+    final fee = type == OrderType.delivery ? 40.0 : _parcelAmount;
+    // Keep the box showing the live default until staff type their own amount.
+    if (type == OrderType.takeaway && !_parcelEdited) {
+      final t = _parcelAuto.toStringAsFixed(0);
+      if (parcelC.text != t) WidgetsBinding.instance.addPostFrameCallback((_) => parcelC.text = t);
+    }
     final tax = sub * .05;
     final total = (sub + tax + fee).roundToDouble();
     return Panel(
@@ -656,7 +704,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
               child: Column(children: [
                 SumRow('Subtotal', inr(sub, decimals: true)),
                 SumRow('Tax (5%)', inr(tax, decimals: true)),
-                if (fee > 0) SumRow('Delivery fee', inr(fee, decimals: true)),
+                if (fee > 0) SumRow(type == OrderType.delivery ? 'Delivery fee' : 'Parcel charge', inr(fee, decimals: true)),
                 const SizedBox(height: 4),
                 SumRow('Total', inr(total), big: true),
               ]),
@@ -673,7 +721,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
               const SizedBox(height: 10),
               Builder(builder: (_) {
                 final prior = existing?.liveLines ?? const <OrderLine>[];
-                final whole = Order(id: 0, type: type)..lines.addAll([for (final l in [...prior, ...cart]) l.copy()]);
+                final whole = Order(id: 0, type: type)
+                  ..parcelRate = _parcelPerItem
+                  ..parcelOverride = _parcelOverride
+                  ..lines.addAll([for (final l in [...prior, ...cart]) l.copy()]);
                 return Btn(
                   'Pay now ${inr(whole.total)} & Print KOT + Bill',
                   icon: Icons.payments_outlined,
@@ -732,15 +783,31 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     }
     return Column(children: [
       Row(children: [
-        Expanded(child: TextField(controller: nameC, decoration: const InputDecoration(hintText: 'Customer name'))),
+        Expanded(child: TextField(controller: nameC, focusNode: nameF, decoration: const InputDecoration(hintText: 'Customer name'))),
         const SizedBox(width: 8),
         Expanded(
             child: TextField(
-                controller: phoneC, keyboardType: TextInputType.phone, decoration: const InputDecoration(hintText: 'Phone'))),
+                controller: phoneC, focusNode: phoneF, keyboardType: TextInputType.phone, decoration: const InputDecoration(hintText: 'Phone'))),
       ]),
+      if (type == OrderType.takeaway) ...[
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(child: Text('Parcel charge (₹5 per non-MRP item)', style: ts(13, c: C.muted))),
+          SizedBox(
+            width: 90,
+            child: TextField(
+              controller: parcelC,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.right,
+              onChanged: (_) => setState(() => _parcelEdited = true),
+              decoration: const InputDecoration(prefixText: '₹ ', isDense: true),
+            ),
+          ),
+        ]),
+      ],
       if (type == OrderType.delivery) ...[
         const SizedBox(height: 8),
-        TextField(controller: addrC, decoration: const InputDecoration(hintText: 'Delivery address')),
+        TextField(controller: addrC, focusNode: addrF, decoration: const InputDecoration(hintText: 'Delivery address')),
       ],
     ]);
   }

@@ -42,6 +42,32 @@ drop policy if exists pkg_menu_manage_del on bpos.product_kot_groups;
 create policy pkg_menu_manage_del on bpos.product_kot_groups for delete to authenticated
 using (exists (select 1 from bpos.products p where p.id = product_id and bpos.has_permission(p.outlet_id, 'menu.manage')));
 
+-- Signed-in users (role `authenticated`) need to READ these tables too: the POS reads them with the
+-- user's token after login, and every insert/update asks for the saved row back, which needs select.
+-- (An existing `anon_read` policy usually covers only the anon role.) Menu data is not sensitive,
+-- and the web menu already exposes it; writes stay gated by menu.manage above.
+do $$
+declare t text;
+begin
+  foreach t in array array['products','product_variants','product_kot_groups','categories','kot_groups','menu_versions'] loop
+    execute format('drop policy if exists %I on bpos.%I', t || '_auth_read', t);
+    execute format('create policy %I on bpos.%I for select to authenticated using (true)', t || '_auth_read', t);
+  end loop;
+end $$;
+
+-- Creating a menu item under a new category creates the category too.
+alter table bpos.categories enable row level security;
+grant insert, update on bpos.categories to authenticated;
+
+drop policy if exists categories_menu_manage_ins on bpos.categories;
+create policy categories_menu_manage_ins on bpos.categories for insert to authenticated
+with check (bpos.has_permission(outlet_id, 'menu.manage'));
+
+drop policy if exists categories_menu_manage_upd on bpos.categories;
+create policy categories_menu_manage_upd on bpos.categories for update to authenticated
+using (bpos.has_permission(outlet_id, 'menu.manage'))
+with check (bpos.has_permission(outlet_id, 'menu.manage'));
+
 -- IMPORTANT: enabling RLS on a table that anon/authenticated could read before will hide every row
 -- unless a select policy exists. The POS already reads these tables, so check first that you have one:
 --   select tablename, policyname, cmd, roles from pg_policies

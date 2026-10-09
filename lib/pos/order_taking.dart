@@ -125,12 +125,35 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   Future<void> add(MenuItem m) async {
     final s = StoreScope.read(context);
     if (s.offReason(m) != null) return;
+    final left = s.stockLeft(m, cart);
+    if (left != null && left <= 0) {
+      toast(context, 'No more ${m.name} in stock', error: true);
+      return;
+    }
     if (m.customizable) {
       final l = await showCustomizeDialog(context, m);
-      if (l != null) setState(() => _merge(l));
+      if (l == null || !mounted) return;
+      // Stock may have moved while the dialog was open; never take more than is left.
+      final room = s.stockLeft(m, cart);
+      if (room != null && l.qty > room) {
+        if (room <= 0) return;
+        l.qty = room;
+        toast(context, 'Only $room ${m.name} left', error: true);
+      }
+      setState(() => _merge(l));
     } else {
       setState(() => _merge(OrderLine(item: m)));
     }
+  }
+
+  /// One more of [l] if stock allows, else says so. Used by the + button and the + key.
+  void _incLine(Store s, OrderLine l) {
+    final left = s.stockLeft(l.item, cart);
+    if (left != null && left <= 0) {
+      toast(context, 'No more ${l.item.name} in stock', error: true);
+      return;
+    }
+    setState(() => l.qty++);
   }
 
   void _merge(OrderLine l) {
@@ -261,8 +284,12 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     void setType(OrderType t) => setState(() => _switchType(t));
     void bump(int d) {
       if (cart.isEmpty) return;
+      final l = cart.last;
+      if (d > 0) {
+        _incLine(s, l);
+        return;
+      }
       setState(() {
-        final l = cart.last;
         l.qty += d;
         if (l.qty <= 0) cart.removeLast();
       });
@@ -832,7 +859,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                 l.qty--;
                 if (l.qty <= 0) cart.remove(l);
               }),
-              onInc: () => setState(() => l.qty++),
+              onInc: () => _incLine(StoreScope.read(context), l),
             ),
             const Spacer(),
             Text('${inr(l.unit)} ea', style: ts(12, c: C.muted)),

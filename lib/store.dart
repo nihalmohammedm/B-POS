@@ -1261,6 +1261,15 @@ class Store extends ChangeNotifier {
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   }
 
+  /// Units of [m] still sellable once [picked] (the lines already in the cart) are counted.
+  /// Null = stock isn't tracked for this item, so there's no limit.
+  int? stockLeft(MenuItem m, Iterable<OrderLine> picked) {
+    final st = stock[m.id];
+    if (st == null) return null;
+    final inCart = picked.where((l) => l.item.id == m.id).fold<int>(0, (a, l) => a + l.qty);
+    return math.max(0, st - inCart);
+  }
+
   String? offReason(MenuItem m) {
     if (catOff.contains(m.cat)) return 'Category off';
     if (itemOff.contains(m.id)) return 'Turned off';

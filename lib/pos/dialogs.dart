@@ -6,6 +6,7 @@ import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/keys.dart';
+import 'menu_editor_screen.dart' show showMenuItemSheet;
 
 // ---------------- Customise (variants / add-ons) ----------------
 Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderLine? initial}) {
@@ -313,7 +314,12 @@ Future<void> showItemManage(BuildContext context, MenuItem m, {VoidCallback? onA
           const SizedBox(height: 24),
           Row(children: [
             RoundIcon(Icons.edit_outlined,
-                size: 56, onTap: () => toast(ctx, 'Menu editing opens in the back office'), tooltip: 'Edit item'),
+                size: 56,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  showMenuItemSheet(context, m);
+                },
+                tooltip: 'Edit item'),
             const SizedBox(width: 10),
             Expanded(
                 child: Btn(reason != null ? 'Unavailable' : 'Add to order  →',

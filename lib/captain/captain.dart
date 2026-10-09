@@ -649,9 +649,20 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
   Future<void> tap(MenuItem m) async {
     final s = StoreScope.read(context);
     if (s.offReason(m) != null) return;
+    final left = s.stockLeft(m, cart);
+    if (left != null && left <= 0) {
+      toast(context, 'No more ${m.name} in stock', error: true);
+      return;
+    }
     if (m.customizable) {
       final l = await _optionSheet(m);
       if (l != null) {
+        final room = s.stockLeft(m, cart);
+        if (room != null && l.qty > room) {
+          if (room <= 0) return;
+          l.qty = room;
+          toast(context, 'Only $room ${m.name} left', error: true);
+        }
         setState(() {
           _merge(l);
           qC.clear();
@@ -1268,7 +1279,14 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                                 l.qty--;
                                 if (l.qty <= 0) cart.remove(l);
                               }),
-                              onInc: () => setState(() => l.qty++),
+                              onInc: () {
+                                final left = StoreScope.read(context).stockLeft(l.item, cart);
+                                if (left != null && left <= 0) {
+                                  toast(context, 'No more ${l.item.name} in stock', error: true);
+                                  return;
+                                }
+                                setState(() => l.qty++);
+                              },
                             ),
                           ]),
                           const SizedBox(height: 8),

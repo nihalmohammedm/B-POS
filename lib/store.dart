@@ -1,3 +1,4 @@
+import 'plain_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -134,6 +135,14 @@ class Store extends ChangeNotifier {
     outletPhone = await _getSetting('outletPhone') ?? outletPhone;
     await _loadKotConfig();
     await _loadCaptains();
+    final periodsStr = await _getSetting('mealPeriods');
+    if (periodsStr != null) {
+      try {
+        mealPeriods = (jsonDecode(periodsStr) as List).map((e) => MealPeriod.fromJson(e as Map<String, dynamic>)).toList();
+      } catch (_) {
+        // Corrupt value: no meal periods rather than failing startup.
+      }
+    }
     final layoutStr = await _getSetting('printLayout');
     if (layoutStr != null) {
       try {
@@ -464,6 +473,28 @@ class Store extends ChangeNotifier {
     _revoked.close();
     super.dispose();
   }
+
+  // ---------- meal periods ----------
+  List<MealPeriod> mealPeriods = [];
+
+  void setMealPeriods(List<MealPeriod> v) {
+    mealPeriods = List.of(v);
+    notifyListeners();
+    _setSetting('mealPeriods', jsonEncode(mealPeriods.map((p) => p.toJson()).toList()));
+  }
+
+  /// The period running at [now], or null when none is set up / none covers this time.
+  MealPeriod? currentPeriod([DateTime? now]) {
+    final t = now ?? DateTime.now();
+    for (final p in mealPeriods) {
+      if (p.covers(t)) return p;
+    }
+    return null;
+  }
+
+  /// Whether [cat] is served in [p]. No period (all day) or a category that no period
+  /// claims means yes.
+  bool catInPeriod(String cat, MealPeriod? p) => p == null || !mealPeriods.any((x) => x.cats.contains(cat)) || p.cats.contains(cat);
 
   // ---------- print layout ----------
   PrintLayout printLayout = PrintLayout();
@@ -806,6 +837,7 @@ class Store extends ChangeNotifier {
         'orders': orders.map((o) => o.toJson()).toList(),
         'kotGroups': kotGroups.map((g) => g.toJson()).toList(),
         'printLayout': printLayout.toJson(),
+        'mealPeriods': mealPeriods.map((p) => p.toJson()).toList(),
         'nextKot': _kotSeq + 1,
         'nextTa': _taSeq + 1,
         'billRequests': billRequests.map((r) => r.orderId).toList(),
@@ -856,6 +888,7 @@ class Store extends ChangeNotifier {
       ..clear()
       ..addAll((j['orders'] as List? ?? []).map((e) => Order.fromJson(e as Map<String, dynamic>)));
     kotGroups = (j['kotGroups'] as List? ?? []).map((e) => KotGroup.fromJson(e as Map<String, dynamic>)).toList();
+    mealPeriods = (j['mealPeriods'] as List? ?? []).map((e) => MealPeriod.fromJson(e as Map<String, dynamic>)).toList();
     if (j['printLayout'] is Map<String, dynamic>) printLayout = PrintLayout.fromJson(j['printLayout'] as Map<String, dynamic>);
     _kotSeq = ((j['nextKot'] as num?) ?? 1).toInt() - 1;
     _taSeq = ((j['nextTa'] as num?) ?? 1).toInt() - 1;
@@ -1051,7 +1084,25 @@ class Store extends ChangeNotifier {
     } catch (e) {
       lastErr = e;
     }
-    return '${lastErr ?? 'Could not connect'}';
+    if (lastErr != null) debugPrint('Printer ${p.name} error: $lastErr');
+    return _plainPrintError(p, lastErr);
+  }
+
+  /// Turns low-level connection exceptions into one short line staff can act on.
+  String _plainPrintError(PosPrinter p, Object? e) {
+    if (e is String) return e; // already written for people ("No IP address set")
+    final raw = '${e ?? ''}'.toLowerCase();
+    if (e is TimeoutException || raw.contains('timeout') || raw.contains('timed out')) {
+      return 'Printer not responding. Check it is switched on.';
+    }
+    switch (p.conn) {
+      case PrinterConn.lan:
+        return "Can't reach the printer. Check it is on and on the same Wi-Fi.";
+      case PrinterConn.bluetooth:
+        return "Can't connect over Bluetooth. Check the printer is on and paired.";
+      case PrinterConn.usb:
+        return "Can't connect over USB. Check the cable and plug it in again.";
+    }
   }
 
   // ---------- printer status ----------
@@ -1197,7 +1248,7 @@ class Store extends ChangeNotifier {
       await _saveTables();
       return r;
     } catch (e) {
-      lastSyncError = e is BackofficeException ? e.message : e.toString();
+      lastSyncError = e is BackofficeException ? e.message : plainError(e);
       rethrow;
     } finally {
       syncingMenu = false;

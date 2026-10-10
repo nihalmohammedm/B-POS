@@ -206,7 +206,17 @@ class OrderDetail extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = StoreScope.of(context);
     final o = s.orderById(orderId);
-    if (o == null) return Panel(child: Center(child: Text('Order closed', style: ts(15, c: C.muted))));
+    if (o == null) {
+      // Order finished while this detail was open. In the narrow-screen dialog there is
+      // nothing left to show, so dismiss it instead of leaving an empty sheet behind.
+      final route = ModalRoute.of(context);
+      if (route is PopupRoute && route.isCurrent) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (context.mounted && route.isActive) Navigator.of(context).pop();
+        });
+      }
+      return Panel(child: Center(child: Text('Order closed', style: ts(15, c: C.muted))));
+    }
     final st = s.stageOf(o);
     final flow = flows[o.type]!;
     final idx = flow.indexOf(st) < 0 ? 0 : flow.indexOf(st);

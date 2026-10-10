@@ -80,6 +80,41 @@ class Addon {
   factory Addon.fromJson(Map<String, dynamic> j) => Addon(j['name'] as String, (j['price'] as num).toDouble());
 }
 
+/// A named time-of-day window (Morning, Lunch, Evening, Dinner…) and the categories
+/// served in it. Categories that appear in no period are served all day. A window
+/// that ends before it starts (e.g. 22:00–02:00) runs past midnight.
+class MealPeriod {
+  final String id, name;
+  final int startMin, endMin; // minutes after midnight, 0..1439
+  final Set<String> cats;
+  const MealPeriod({required this.id, required this.name, required this.startMin, required this.endMin, this.cats = const {}});
+
+  bool covers(DateTime t) {
+    final m = t.hour * 60 + t.minute;
+    if (startMin == endMin) return true;
+    return startMin < endMin ? (m >= startMin && m < endMin) : (m >= startMin || m < endMin);
+  }
+
+  String get range => '${fmt(startMin)} – ${fmt(endMin)}';
+
+  static String fmt(int m) {
+    final h = m ~/ 60, mm = m % 60;
+    final h12 = h % 12 == 0 ? 12 : h % 12;
+    return '$h12:${mm.toString().padLeft(2, '0')} ${h < 12 ? 'AM' : 'PM'}';
+  }
+
+  MealPeriod copyWith({String? name, int? startMin, int? endMin, Set<String>? cats}) =>
+      MealPeriod(id: id, name: name ?? this.name, startMin: startMin ?? this.startMin, endMin: endMin ?? this.endMin, cats: cats ?? this.cats);
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'start': startMin, 'end': endMin, 'cats': cats.toList()};
+  factory MealPeriod.fromJson(Map<String, dynamic> j) => MealPeriod(
+      id: j['id'] as String,
+      name: j['name'] as String,
+      startMin: (j['start'] as num).toInt(),
+      endMin: (j['end'] as num).toInt(),
+      cats: {...(j['cats'] as List? ?? []).cast<String>()});
+}
+
 class MenuItem {
   final String id, code, cat, name, desc;
   /// Optional grouping label within [cat], shown as a sub-category tile once the

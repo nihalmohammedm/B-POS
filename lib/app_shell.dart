@@ -54,10 +54,46 @@ class _BposAppState extends State<BposApp> {
       title: widget.title,
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
+      builder: (context, child) => _UiScale(child: child!),
       home: _ExitGuard(child: widget.home),
     );
     if (_link != null) app = CaptainLinkScope(link: _link!, child: app);
     return StoreScope(store: store, child: app);
+  }
+}
+
+/// Scales the whole UI down on small/low-resolution landscape tablets (HD POS
+/// terminals) so layouts designed for ~760dp-tall screens fit without clipping.
+/// Phones and large screens are left untouched. Taps are mapped back by [FittedBox].
+class _UiScale extends StatelessWidget {
+  final Widget child;
+  const _UiScale({required this.child});
+
+  static const _refHeight = 760.0, _minScale = .72;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final size = mq.size;
+    final scale = size.width >= 900 ? (size.height / _refHeight).clamp(_minScale, 1.0) : 1.0;
+    if (scale >= .995) return child;
+    final inner = Size(size.width / scale, size.height / scale);
+    return FittedBox(
+      fit: BoxFit.fill,
+      child: SizedBox.fromSize(
+        size: inner,
+        child: MediaQuery(
+          data: mq.copyWith(
+            size: inner,
+            padding: mq.padding / scale,
+            viewPadding: mq.viewPadding / scale,
+            viewInsets: mq.viewInsets / scale,
+            systemGestureInsets: mq.systemGestureInsets / scale,
+          ),
+          child: child,
+        ),
+      ),
+    );
   }
 }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart' hide Thumb;
 import 'package:flutter/services.dart';
 import '../models.dart';
@@ -26,6 +27,9 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   String? subCat;
   String query = '';
   bool vegOnly = false;
+  /// Meal-period filter: null = follow the clock, '' = all day, otherwise a period id.
+  String? periodSel;
+  Timer? _clock;
   late OrderType type = widget.startType;
   String? tableId, partyKey;
   bool tableError = false;
@@ -67,6 +71,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   @override
   void initState() {
     super.initState();
+    // Re-evaluate the running meal period as the clock moves.
+    _clock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
     final t = widget.target;
     if (t != null) {
       type = t.type;
@@ -118,6 +126,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     addrF.dispose();
     searchC.dispose();
     searchF.dispose();
+    _clock?.cancel();
     _tick.dispose();
     super.dispose();
   }
@@ -333,10 +342,70 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     ];
   }
 
+  MealPeriod? _period(Store s) {
+    if (s.mealPeriods.isEmpty || periodSel == '') return null;
+    if (periodSel == null) return s.currentPeriod();
+    for (final p in s.mealPeriods) {
+      if (p.id == periodSel) return p;
+    }
+    return s.currentPeriod();
+  }
+
+  List<String> _cats(Store s) {
+    final p = _period(s);
+    return [for (final c in s.categories) if (s.catInPeriod(c, p)) c];
+  }
+
+  int _count(Store s, String? c) {
+    final p = _period(s);
+    return (c == null ? s.menu : s.itemsIn(c)).where((m) => s.catInPeriod(m.cat, p)).length;
+  }
+
+  Widget _periodBar(Store s) {
+    final now = s.currentPeriod();
+    final sel = _period(s);
+    Widget chip(String label, String? sub, bool on, VoidCallback tap) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Material(
+            color: on ? C.ink : Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: tap,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(999), border: Border.all(color: on ? C.ink : C.line)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(label, style: ts(14, w: w5, c: on ? Colors.white : C.ink)),
+                  if (sub != null) ...[const SizedBox(width: 8), Text(sub, style: ts(12, c: on ? const Color(0xDDFFFFFF) : C.muted))],
+                ]),
+              ),
+            ),
+          ),
+        );
+    void pick(String? id) => setState(() {
+          periodSel = id;
+          cat = null;
+          subCat = null;
+        });
+    return SizedBox(
+      height: 40,
+      child: ListView(scrollDirection: Axis.horizontal, children: [
+        for (final p in s.mealPeriods)
+          chip(p.name, p.range, sel?.id == p.id, () => pick(p.id == now?.id ? null : p.id)),
+        chip('All day', null, sel == null, () => pick('')),
+      ]),
+    );
+  }
+
   List<MenuItem> _matches(Store s) {
     final q = query.trim().toLowerCase();
+    final p = _period(s);
     return s.menu
         .where((m) =>
+            s.catInPeriod(m.cat, p) &&
             (cat == null || m.cat == cat) &&
             (subCat == null || m.subCat == subCat) &&
             (!vegOnly || m.veg) &&
@@ -415,11 +484,15 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         ]),
       ),
       const SliverToBoxAdapter(child: SizedBox(height: 16)),
+      if (s.mealPeriods.isNotEmpty) ...[
+        SliverToBoxAdapter(child: _periodBar(s)),
+        const SliverToBoxAdapter(child: SizedBox(height: 12)),
+      ],
       if (cat == null)
         SliverGrid(
           gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 200, mainAxisExtent: 104, crossAxisSpacing: 12, mainAxisSpacing: 12),
-          delegate: SliverChildListDelegate([_catTile(s, null), for (final c in s.categories) _catTile(s, c)]),
+          delegate: SliverChildListDelegate([_catTile(s, null), for (final c in _cats(s)) _catTile(s, c)]),
         )
       else
         // A category is open: shrink the tiles to a slim strip so the items get the space.
@@ -428,7 +501,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
             height: 46,
             child: ListView(scrollDirection: Axis.horizontal, children: [
               _catChip(s, null),
-              for (final c in s.categories) _catChip(s, c),
+              for (final c in _cats(s)) _catChip(s, c),
             ]),
           ),
         ),
@@ -508,7 +581,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Text(c ?? 'All', style: ts(14, w: w5, c: Colors.white)),
               const SizedBox(width: 6),
-              Text('${c == null ? s.menu.length : s.itemsIn(c).length}', style: ts(12, c: const Color(0xDDFFFFFF))),
+              Text('${_count(s, c)}', style: ts(12, c: const Color(0xDDFFFFFF))),
               if (off) ...[const SizedBox(width: 6), const Pill('OFF', bg: Colors.white, fg: C.ink2, size: 10)],
             ]),
           ),
@@ -521,7 +594,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     final on = cat == c;
     final off = c != null && s.catOff.contains(c);
     final color = c == null ? C.ink : (off ? const Color(0xFFB5B5B5) : colorForCategory(c).$1);
-    final count = c == null ? s.menu.length : s.itemsIn(c).length;
+    final count = _count(s, c);
     return Material(
       color: color,
       borderRadius: BorderRadius.circular(18),
@@ -572,7 +645,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
           onTap: reason != null ? null : () => add(m),
           onLongPress: () => showItemManage(context, m, onAdd: () => add(m)),
           child: Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: qty > 0 ? C.sky : C.line, width: qty > 0 ? 2 : 1)),
@@ -592,7 +665,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                     child: Text('$qty', style: ts(13, w: w6, c: Colors.white)),
                   ),
               ]),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Text(m.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: ts(15, w: w5, h: 1.25)),
               const SizedBox(height: 4),
               Row(children: [
@@ -681,25 +754,29 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     }
     final tax = sub * .05;
     final total = (sub + tax + fee).roundToDouble();
+    // Short landscape tablets: shrink chrome so the item list gets the room.
+    final d = MediaQuery.of(context).size.height < 800;
+    final gap = d ? 8.0 : 14.0;
+    final pad = d ? 12.0 : 18.0;
     return Panel(
       padding: EdgeInsets.zero,
       child: Column(children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+          padding: EdgeInsets.fromLTRB(pad, d ? 10 : 18, pad, d ? 8 : 14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
-              Text('Current order', style: ts(20, w: w5)),
+              Text('Current order', style: ts(d ? 16 : 20, w: w5)),
               const Spacer(),
               Pill('KOT #${s.nextKotNo}', bg: Colors.white, border: C.line),
             ]),
-            const SizedBox(height: 14),
+            SizedBox(height: gap),
             Seg<OrderType>(
               expand: true,
               items: const [(OrderType.dineIn, 'Dine in'), (OrderType.takeaway, 'Takeaway'), (OrderType.delivery, 'Delivery')],
               value: type,
               onChanged: (v) => setState(() => _switchType(v)),
             ),
-            const SizedBox(height: 14),
+            SizedBox(height: gap),
             _typeFields(s),
           ]),
         ),
@@ -715,37 +792,48 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                   Text('Tap an item to add it to the order', style: ts(13, c: C.muted)),
                 ]))
               : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+                  padding: EdgeInsets.symmetric(horizontal: pad, vertical: 2),
                   itemCount: cart.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (c, i) => _lineRow(cart[i]),
+                  itemBuilder: (c, i) => d ? _lineRowDense(cart[i]) : _lineRow(cart[i]),
                 ),
         ),
         const Divider(height: 1),
         Padding(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.all(d ? 10 : 18),
           child: Column(children: [
             Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: const Color(0xFFF5F5F5), borderRadius: BorderRadius.circular(14)),
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: d ? 6 : 14),
+              decoration: BoxDecoration(color: const Color(0xFFF5F5F5), borderRadius: BorderRadius.circular(d ? 10 : 14)),
               child: Column(children: [
-                SumRow('Subtotal', inr(sub, decimals: true)),
-                SumRow('Tax (5%)', inr(tax, decimals: true)),
-                if (fee > 0) SumRow(type == OrderType.delivery ? 'Delivery fee' : 'Parcel charge', inr(fee, decimals: true)),
-                const SizedBox(height: 4),
+                if (d)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                        'Sub ${inr(sub, decimals: true)} · Tax ${inr(tax, decimals: true)}${fee > 0 ? ' · ${type == OrderType.delivery ? 'Delivery' : 'Parcel'} ${inr(fee, decimals: true)}' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ts(11, c: C.muted)),
+                  )
+                else ...[
+                  SumRow('Subtotal', inr(sub, decimals: true)),
+                  SumRow('Tax (5%)', inr(tax, decimals: true)),
+                  if (fee > 0) SumRow(type == OrderType.delivery ? 'Delivery fee' : 'Parcel charge', inr(fee, decimals: true)),
+                  const SizedBox(height: 4),
+                ],
                 SumRow('Total', inr(total), big: true),
               ]),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: d ? 8 : 12),
             Row(children: [
-              Btn.outline('Clear', onTap: cart.isEmpty ? null : () => setState(cart.clear)),
+              Btn.outline('Clear', height: d ? 42 : 52, onTap: cart.isEmpty ? null : () => setState(cart.clear)),
               const SizedBox(width: 10),
               Expanded(
-                  child: Btn(type == OrderType.takeaway && s.printLayout.takeawayBillWithKot ? 'Print KOT + Bill' : 'Confirm & Print KOT', icon: Icons.print_outlined, expand: true, onTap: cart.isEmpty ? null : confirm)),
+                  child: Btn(height: d ? 42 : 52, type == OrderType.takeaway && s.printLayout.takeawayBillWithKot ? 'Print KOT + Bill' : 'Confirm & Print KOT', icon: Icons.print_outlined, expand: true, onTap: cart.isEmpty ? null : confirm)),
             ]),
             // Optional for takeaway: collect now, or leave it for hand-over.
             if (type == OrderType.takeaway) ...[
-              const SizedBox(height: 10),
+              SizedBox(height: d ? 6 : 10),
               Builder(builder: (_) {
                 final prior = existing?.liveLines ?? const <OrderLine>[];
                 final whole = Order(id: 0, type: type)
@@ -756,6 +844,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                   'Pay now ${inr(whole.total)} & Print KOT + Bill',
                   icon: Icons.payments_outlined,
                   bg: C.green,
+                  height: d ? 42 : 52,
                   expand: true,
                   onTap: cart.isEmpty ? null : () => confirm(payNow: true),
                 );
@@ -784,7 +873,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
           onTap: pickTable,
           borderRadius: BorderRadius.circular(14),
           child: Container(
-            height: 54,
+            height: MediaQuery.of(context).size.height < 800 ? 44 : 54,
             padding: const EdgeInsets.symmetric(horizontal: 14),
             decoration: BoxDecoration(
                 color: Colors.white,
@@ -838,6 +927,33 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       ],
     ]);
   }
+
+  // One-row-per-item variant for short screens.
+  Widget _lineRowDense(OrderLine l) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(l.item.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: ts(14, w: w5)),
+              if (l.optText.isNotEmpty) Text(l.optText, maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: C.skyInk)),
+              if (l.note.isNotEmpty) Text('Note: ${l.note}', maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: C.amberInk)),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          QtyStepper(
+            value: l.qty,
+            size: 30,
+            onDec: () => setState(() {
+              l.qty--;
+              if (l.qty <= 0) cart.remove(l);
+            }),
+            onInc: () => _incLine(StoreScope.read(context), l),
+          ),
+          SizedBox(width: 62, child: Text(inr(l.total), textAlign: TextAlign.right, style: ts(14, w: w5))),
+          RoundIcon(Icons.edit_outlined, size: 34, onTap: () => editLine(l), tooltip: 'Edit'),
+          RoundIcon(Icons.delete_outline, size: 34, fg: C.red, onTap: () => setState(() => cart.remove(l)), tooltip: 'Delete'),
+        ]),
+      );
 
   Widget _lineRow(OrderLine l) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),

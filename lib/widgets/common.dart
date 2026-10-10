@@ -448,10 +448,29 @@ Future<T?> showSheet<T>(BuildContext context, WidgetBuilder builder) => showModa
         child: SafeArea(
           top: false,
           child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .86), child: builder(ctx)),
+              // Shrink with the keyboard so a focused field is never pushed under it on short phones.
+              constraints: BoxConstraints(
+                  maxHeight: (MediaQuery.of(ctx).size.height * .86).clamp(0.0, MediaQuery.of(ctx).size.height - MediaQuery.of(ctx).viewInsets.bottom - MediaQuery.of(ctx).padding.top - 8)),
+              child: _BuildOnce(builder: builder)),
         ),
       ),
     );
+
+/// Runs [builder] exactly once per sheet. A modal bottom sheet re-invokes its builder whenever
+/// the keyboard changes `viewInsets` (every focus move on Android), and sheets that create their
+/// TextEditingControllers inside the builder would otherwise lose what was typed.
+class _BuildOnce extends StatefulWidget {
+  final WidgetBuilder builder;
+  const _BuildOnce({required this.builder});
+  @override
+  State<_BuildOnce> createState() => _BuildOnceState();
+}
+
+class _BuildOnceState extends State<_BuildOnce> {
+  Widget? _child;
+  @override
+  Widget build(BuildContext context) => _child ??= widget.builder(context);
+}
 
 Future<T?> showPanelDialog<T>(BuildContext context, {required WidgetBuilder builder, double maxWidth = 520}) =>
     showDialog<T>(

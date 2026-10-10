@@ -1,3 +1,5 @@
+import '../backoffice_api.dart';
+import '../plain_error.dart';
 import 'package:flutter/material.dart';
 import '../pos/pos_shell.dart';
 import '../theme.dart';
@@ -66,7 +68,7 @@ class _AuthGateState extends State<AuthGate> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = e is AuthException || e is BackofficeException ? e.toString() : plainError(e);
         _stage = _Stage.error;
       });
     }
@@ -124,7 +126,7 @@ class _AuthGateState extends State<AuthGate> {
       await _afterAuthenticated(session: session, profile: profile);
       return null;
     } catch (e) {
-      return e.toString();
+      return e is AuthException || e is BackofficeException ? e.toString() : plainError(e);
     }
   }
 

@@ -193,7 +193,7 @@ class CaptainLink extends ChangeNotifier {
         _stop();
         return err; // reached the POS and it said no: no point trying other addresses
       } catch (e) {
-        err = 'Could not reach the POS at $h:$port · same Wi-Fi? POS app open?\n(${_why(e)})';
+        err = "Can't reach the POS. Is the POS app open and on the same Wi-Fi?";
         _stop();
       }
     }
@@ -263,7 +263,7 @@ class CaptainLink extends ChangeNotifier {
 
     // Not at the saved address: look for this POS on the current Wi-Fi (its IP
     // may have changed). The subnet sweep is heavier, so only every third try.
-    lastError = 'POS not reachable at $h ($why) · looking for it on this Wi-Fi…';
+    lastError = "Can't reach the POS ($why). Looking for it on this Wi-Fi…";
     _set(LinkState.offline);
     final found = await discoverPos(posId: _posId, port: port, sweep: _attempt % 3 == 0);
     for (final other in found) {
@@ -275,7 +275,7 @@ class CaptainLink extends ChangeNotifier {
       }
     }
     if (_session == null || _disposed) return;
-    lastError = 'POS not reachable at $h ($why)';
+    lastError = "Can't reach the POS ($why).";
     _set(LinkState.offline);
     _scheduleRetry();
   }
@@ -417,9 +417,9 @@ class CaptainLinkScope extends InheritedNotifier<CaptainLink> {
 /// (different network, router isolation) from Android's cleartext block.
 String _why(Object e) {
   final s = '$e'.replaceAll(RegExp(r'\s+'), ' ');
-  if (s.contains('Cleartext') || s.contains('CLEARTEXT')) return 'Android blocked the local connection';
-  if (s.contains('refused')) return 'connection refused';
-  if (s.contains('TimeoutException') || s.contains('timed out')) return 'no answer · different network or router isolation';
-  if (s.contains('No route') || s.contains('unreachable')) return 'no route to the POS';
-  return s.length > 120 ? s.substring(0, 120) : s;
+  if (s.contains('Cleartext') || s.contains('CLEARTEXT')) return 'phone is blocking the local connection';
+  if (s.contains('refused')) return 'POS app is not open';
+  if (s.contains('TimeoutException') || s.contains('timed out')) return 'no answer, check both are on the same Wi-Fi';
+  if (s.contains('No route') || s.contains('unreachable')) return 'not on the same Wi-Fi';
+  return 'no answer';
 }

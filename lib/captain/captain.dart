@@ -1262,6 +1262,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                   child: ListView(shrinkWrap: true, padding: const EdgeInsets.symmetric(horizontal: 18), children: [
                     for (final l in cart)
                       Container(
+                        key: ObjectKey(l),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: C.soft))),
                         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [

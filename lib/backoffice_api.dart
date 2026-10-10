@@ -1,3 +1,4 @@
+import 'plain_error.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'models.dart';
@@ -42,7 +43,7 @@ class BackofficeApi {
 
   Future<List<dynamic>> _get(String path, Map<String, String> qp) async {
     final res = await http.get(_u(path, qp), headers: _headers).timeout(const Duration(seconds: 15));
-    if (res.statusCode >= 300) throw BackofficeException('$path failed (${res.statusCode}): ${res.body}');
+    if (res.statusCode >= 300) throw BackofficeException(plainHttpError(res.statusCode));
     return jsonDecode(res.body) as List<dynamic>;
   }
 

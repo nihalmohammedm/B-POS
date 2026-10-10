@@ -160,7 +160,7 @@ class _UpdatePanelState extends State<UpdatePanel> {
       final path = await Updater.download(u, (p) { if (mounted) setState(() => _progress = p); });
       await Updater.install(path);
     } catch (e) {
-      if (mounted) setState(() => _error = e is UpdateException ? e.message : 'Update failed · $e');
+      if (mounted) setState(() => _error = e is UpdateException ? e.message : 'Update failed. Check the internet and try again.');
     } finally {
       if (mounted) setState(() => _progress = null);
     }

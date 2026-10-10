@@ -1,3 +1,4 @@
+import '../plain_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -8,6 +9,7 @@ import '../updater.dart';
 import '../widgets/common.dart';
 import 'captains_screen.dart';
 import 'kot_groups_screen.dart';
+import 'meal_periods_panel.dart';
 import 'menu_editor_screen.dart';
 import 'payment_qr_panel.dart';
 import 'print_layout_screen.dart';
@@ -18,6 +20,7 @@ enum _Sec {
   connection('Connection', Icons.link),
   menu('Menu & sync', Icons.sync),
   menuEdit('Menu items', Icons.restaurant_menu),
+  mealTimes('Meal times', Icons.schedule),
   bills('Settled bills', Icons.receipt_long_outlined),
   printers('Printers', Icons.print_outlined),
   captains('Captains', Icons.phone_android),
@@ -88,7 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      toast(context, 'Sync failed · ${s.lastSyncError ?? e}', error: true);
+      toast(context, 'Sync failed · ${s.lastSyncError ?? plainError(e)}', error: true);
     }
   }
 
@@ -217,6 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _Sec.connection => [_connectionPanel(s)],
       _Sec.menu => [_syncPanel(s), _overviewPanel(s)],
       _Sec.menuEdit => [_menuEditPanel(s)],
+      _Sec.mealTimes => [const MealPeriodsPanel()],
       _Sec.bills => [_billSyncPanel(s)],
       _Sec.printers => [_printersPanel(s)],
       _Sec.captains => [_captainsPanel(s)],

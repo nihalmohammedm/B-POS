@@ -1,3 +1,4 @@
+import '../plain_error.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
@@ -99,7 +100,7 @@ class SupabaseAuthApi {
   Future<List<dynamic>> _get(String accessToken, String path, Map<String, String> qp) async {
     final uri = Uri.parse('$_root/rest/v1/$path').replace(queryParameters: qp);
     final res = await http.get(uri, headers: _restHeaders(accessToken)).timeout(const Duration(seconds: 15));
-    if (res.statusCode >= 300) throw AuthException('$path failed (${res.statusCode}): ${res.body}');
+    if (res.statusCode >= 300) throw AuthException(plainHttpError(res.statusCode));
     return jsonDecode(res.body) as List<dynamic>;
   }
 
@@ -120,9 +121,7 @@ class SupabaseAuthApi {
   Future<ProfileInfo> fetchProfile({required String accessToken, required String authUserId, required String outletId}) async {
     final users = await _get(accessToken, 'users', {'select': 'id,full_name', 'auth_user_id': 'eq.$authUserId', 'limit': '1'});
     if (users.isEmpty) {
-      throw AuthException('Password accepted, but no BPOS staff profile is linked to this login '
-          '(bpos.users with auth_user_id = $authUserId). If the profile exists, the database is hiding it from '
-          'signed-in users: check the RLS policy on bpos.users.');
+      throw AuthException('This login has no staff profile. Ask the owner to add you.');
     }
     final userId = users.first['id'] as String;
     final fullName = users.first['full_name'] as String? ?? '';
@@ -135,13 +134,12 @@ class SupabaseAuthApi {
       'limit': '1',
     });
     if (outletUsers.isEmpty) {
-      throw AuthException('${fullName.isEmpty ? 'This user' : fullName} is not assigned to this outlet, or the assignment is '
-          'inactive (bpos.outlet_users). If it exists, check the RLS policy on bpos.outlet_users.');
+      throw AuthException('${fullName.isEmpty ? 'This user' : fullName} is not set up for this outlet. Ask the owner to add you.');
     }
     final roleId = outletUsers.first['role_id'] as String;
     final role = outletUsers.first['roles'] as Map<String, dynamic>?;
     if (role == null) {
-      throw AuthException('Signed in, but your role could not be read (bpos.roles is hidden from signed-in users: check its RLS policy).');
+      throw AuthException('Signed in, but your role is not set. Ask the owner to check your access.');
     }
     final roleCode = role['code'] as String? ?? '';
     final roleName = role['name'] as String? ?? '';

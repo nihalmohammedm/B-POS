@@ -559,7 +559,9 @@ class _TableDetailsState extends State<TableDetails> {
         RoundIcon(Icons.print_disabled_outlined, size: 52, onTap: () => settleFlow(context, o, print: false), tooltip: 'Settle without printing'),
         const SizedBox(width: 10),
         RoundIcon(Icons.pause_circle_outline, size: 52, onTap: () => holdBillFlow(context, o), tooltip: 'Hold bill · clear the table'),
-        const SizedBox(width: 10),
+      ]),
+      const SizedBox(height: 10),
+      Row(children: [
         Expanded(
           child: o.billed
               ? Btn.outline('Reopen', expand: true, onTap: () => reopenFlow(context, o))

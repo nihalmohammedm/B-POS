@@ -8,6 +8,7 @@ import '../widgets/common.dart';
 import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
 import 'dialogs.dart';
+import 'item_amend.dart';
 import 'payment.dart';
 
 class OrderTakingScreen extends StatefulWidget {
@@ -745,6 +746,16 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   }
 
   Widget _cartPanel(Store s) {
+    // Items already sent to the kitchen for this table/party/order, shown above the unsent cart.
+    Order? sentOrder = type == OrderType.dineIn
+        ? (tableId == null || partyKey == null
+            ? null
+            : (() {
+                final p = s.party(tableId!, partyKey!);
+                return p == null ? null : s.orderOfParty(s.table(tableId!), p);
+              })())
+        : existing;
+    if (sentOrder != null && sentOrder.lines.isEmpty) sentOrder = null;
     final sub = cart.fold<double>(0, (a, l) => a + l.total);
     final fee = type == OrderType.delivery ? 40.0 : _parcelAmount;
     // Keep the box showing the live default until staff type their own amount.
@@ -782,7 +793,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: cart.isEmpty
+          child: sentOrder == null && cart.isEmpty
               ? Center(
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
                   const Icon(Icons.receipt_long_outlined, color: C.faint, size: 36),
@@ -791,11 +802,21 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                   const SizedBox(height: 4),
                   Text('Tap an item to add it to the order', style: ts(13, c: C.muted)),
                 ]))
-              : ListView.separated(
+              : ListView(
                   padding: EdgeInsets.symmetric(horizontal: pad, vertical: 2),
-                  itemCount: cart.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (c, i) => d ? _lineRowDense(cart[i]) : _lineRow(cart[i]),
+                  children: [
+                    if (sentOrder != null) ...[
+                      Padding(padding: const EdgeInsets.only(top: 10, bottom: 2), child: const Label('Already sent')),
+                      for (final l in sentOrder.lines) SentLineRow(sentOrder, l),
+                      const Divider(height: 1),
+                    ],
+                    if (cart.isNotEmpty)
+                      Padding(padding: const EdgeInsets.only(top: 10, bottom: 2), child: const Label('New items')),
+                    for (var i = 0; i < cart.length; i++) ...[
+                      if (i > 0) const Divider(height: 1),
+                      d ? _lineRowDense(cart[i]) : _lineRow(cart[i]),
+                    ],
+                  ],
                 ),
         ),
         const Divider(height: 1),

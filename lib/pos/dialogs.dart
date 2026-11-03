@@ -15,8 +15,14 @@ Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderL
   final addons = <String>{...?initial?.addons};
   int qty = initial?.qty ?? 1;
   final noteC = TextEditingController(text: initial?.note ?? '');
-  OrderLine build() =>
-      OrderLine(item: m, variant: variant, addons: addons.toList(), qty: qty, note: noteC.text.trim());
+  // An open-price line being changed keeps the price typed for it (add-ons are re-added on top).
+  final typedBase = m.openPrice && initial != null
+      ? initial.unitPrice - OrderLine(item: m, variant: initial.variant, addons: initial.addons).priced(0).unitPrice
+      : null;
+  OrderLine build() {
+    final l = OrderLine(item: m, variant: variant, addons: addons.toList(), qty: qty, note: noteC.text.trim());
+    return typedBase == null ? l : l.priced(typedBase);
+  }
 
   return showPanelDialog<OrderLine>(context,
       maxWidth: 580,
@@ -103,7 +109,7 @@ Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderL
                     QtyStepper(value: qty, size: 44, onDec: qty > 1 ? () => set(() => qty--) : null, onInc: () => set(() => qty++)),
                     const SizedBox(width: 12),
                     Expanded(
-                        child: Btn('${initial != null ? 'Update' : 'Add to order'} · ${inr(line.total)}',
+                        child: Btn(m.openPrice && initial == null ? 'Next · enter price' : '${initial != null ? 'Update' : 'Add to order'} · ${inr(line.total)}',
                             expand: true, height: 54, onTap: () => Navigator.pop(ctx, build()))),
                   ]),
                 ]),
@@ -269,7 +275,7 @@ Future<void> showItemManage(BuildContext context, MenuItem m, {VoidCallback? onA
               Text(m.desc.isEmpty ? m.cat : m.desc, style: ts(15, c: C.muted, h: 1.45)),
             ])),
             const SizedBox(width: 12),
-            Pill('${m.variants.isNotEmpty ? 'from ' : ''}${inr(m.fromPrice)}',
+            Pill(priceLabel(m),
                 bg: Colors.white, border: C.line, size: 18, weight: w6, pad: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
           ]),
           const SizedBox(height: 20),
@@ -419,7 +425,7 @@ Future<void> showCategoryManage(BuildContext context, String c, {void Function(M
                                   Flexible(child: Text(m.name, overflow: TextOverflow.ellipsis, style: ts(15, w: w5))),
                                 ]),
                                 Text(
-                                    '${inr(m.fromPrice)}${s.stock[m.id] == 0 ? ' · Sold out' : s.stock[m.id] != null ? ' · ${s.stock[m.id]} left' : ''}',
+                                    '${m.openPrice ? 'Price at order' : inr(m.fromPrice)}${s.stock[m.id] == 0 ? ' · Sold out' : s.stock[m.id] != null ? ' · ${s.stock[m.id]} left' : ''}',
                                     style: ts(13, c: s.stock[m.id] == 0 ? C.redInk : C.muted)),
                               ])),
                             ]),

@@ -638,7 +638,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
 
   void _merge(OrderLine l) {
     for (final c in cart) {
-      if (c.sameConfig(l)) {
+      if (c.sameConfig(l) && c.unitPrice == l.unitPrice) {
         c.qty += l.qty;
         return;
       }
@@ -654,23 +654,23 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
       toast(context, 'No more ${m.name} in stock', error: true);
       return;
     }
-    if (m.customizable) {
-      final l = await _optionSheet(m);
-      if (l != null) {
-        final room = s.stockLeft(m, cart);
-        if (room != null && l.qty > room) {
-          if (room <= 0) return;
-          l.qty = room;
-          toast(context, 'Only $room ${m.name} left', error: true);
-        }
-        setState(() {
-          _merge(l);
-          qC.clear();
-        });
-      }
-    } else {
-      setState(() => _merge(OrderLine(item: m)));
+    var l = m.customizable ? await _optionSheet(m) : OrderLine(item: m);
+    if (l == null || !mounted) return;
+    if (m.openPrice) {
+      l = await askOpenPrice(context, l);
+      if (l == null || !mounted) return;
     }
+    final room = s.stockLeft(m, cart);
+    if (room != null && l.qty > room) {
+      if (room <= 0) return;
+      l.qty = room;
+      toast(context, 'Only $room ${m.name} left', error: true);
+    }
+    final line = l;
+    setState(() {
+      _merge(line);
+      if (m.customizable || m.openPrice) qC.clear();
+    });
   }
 
   void dec(MenuItem m) => setState(() {
@@ -1017,7 +1017,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                       Flexible(child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(16, w: w5))),
                     ]),
                     Text(
-                        '${m.variants.isNotEmpty ? 'from ' : ''}${inr(m.fromPrice)}${m.customizable ? ' · ${m.variants.isNotEmpty ? '${m.variants.length} sizes' : 'add-ons'}' : ''}${q.isNotEmpty ? ' · ${m.cat}' : ''}',
+                        '${priceLabel(m)}${m.customizable ? ' · ${m.variants.isNotEmpty ? '${m.variants.length} sizes' : 'add-ons'}' : ''}${q.isNotEmpty ? ' · ${m.cat}' : ''}',
                         style: ts(13, c: C.muted)),
                   ])),
                 ]),
@@ -1225,7 +1225,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                     QtyStepper(value: qty, size: 44, onDec: qty > 1 ? () => set(() => qty--) : null, onInc: () => set(() => qty++)),
                     const SizedBox(width: 10),
                     Expanded(
-                        child: Btn('Add · ${inr(line.total)}', expand: true, height: 54, fontSize: 16, onTap: () => Navigator.pop(ctx, line))),
+                        child: Btn(m.openPrice ? 'Next · enter price' : 'Add · ${inr(line.total)}', expand: true, height: 54, fontSize: 16, onTap: () => Navigator.pop(ctx, line))),
                   ]),
                 ]),
               );

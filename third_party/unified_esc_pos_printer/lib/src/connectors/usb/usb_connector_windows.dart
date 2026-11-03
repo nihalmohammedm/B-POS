@@ -71,6 +71,22 @@ class UsbConnectorImpl extends UsbConnectorBase {
     _assertState(PrinterConnectionState.disconnected, 'connect');
     _setState(PrinterConnectionState.connecting);
 
+    // The spooler opens and queues for any installed printer, plugged in or
+    // not, so ask Windows whether it can really print before saying connected.
+    String? notReady;
+    try {
+      notReady = await _method.invokeMethod<String>('usbStatus', {'name': device.identifier});
+    } on MissingPluginException {
+      notReady = null; // native side built before usbStatus existed
+    } catch (_) {
+      notReady = null; // a failed check must not block printing
+    }
+    if (notReady != null && notReady.isNotEmpty) {
+      _setState(PrinterConnectionState.error);
+      _setState(PrinterConnectionState.disconnected);
+      throw PrinterNotFoundException(notReady);
+    }
+
     try {
       await _method.invokeMethod('usbConnect', {'name': device.identifier});
 

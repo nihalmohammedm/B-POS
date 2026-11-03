@@ -133,6 +133,12 @@ class MenuItem {
   final String foodType;
   /// Packaged item sold at its printed price (`products.is_mrp`): takeaway adds no parcel charge for it.
   final bool isMrp;
+  /// Priced when ordered (`products.is_open_price`), e.g. fish by size: staff type the
+  /// price for each line, and [price] is only a hint.
+  final bool openPrice;
+  /// Price changes day to day (`products.is_daily_price`): listed on Today's prices so a
+  /// manager can update it each morning without opening the menu editor.
+  final bool dailyPrice;
   const MenuItem({
     required this.id,
     required this.code,
@@ -149,11 +155,22 @@ class MenuItem {
     this.kotGroup,
     this.foodType = '',
     this.isMrp = false,
+    this.openPrice = false,
+    this.dailyPrice = false,
   });
 
   String get type => foodType.isNotEmpty ? foodType : (veg ? 'veg' : 'non-veg');
 
   bool get customizable => variants.isNotEmpty || addons.isNotEmpty;
+
+  /// Menu price of one unit of [variant] (or the item itself), before add-ons. For an
+  /// open-price item it's the minimum staff can type.
+  double basePrice(String? variant) {
+    for (final v in variants) {
+      if (v.name == variant) return v.price;
+    }
+    return price;
+  }
   double get fromPrice => variants.isNotEmpty ? variants.first.price : price;
   String get initials {
     final w = name.split(RegExp(r'\s+'));
@@ -180,7 +197,9 @@ class MenuItem {
       listEquals(kitchenNotes, other.kitchenNotes) &&
       kotGroup == other.kotGroup &&
       foodType == other.foodType &&
-      isMrp == other.isMrp;
+      isMrp == other.isMrp &&
+      openPrice == other.openPrice &&
+      dailyPrice == other.dailyPrice;
 
   @override
   int get hashCode => Object.hash(id, code, cat, subCat, name, desc, price, veg, bestseller);
@@ -201,6 +220,8 @@ class MenuItem {
         'kotGroup': kotGroup,
         'foodType': foodType,
         'isMrp': isMrp,
+        'openPrice': openPrice,
+        'dailyPrice': dailyPrice,
       };
 
   factory MenuItem.fromJson(Map<String, dynamic> j) => MenuItem(
@@ -219,6 +240,8 @@ class MenuItem {
         kotGroup: j['kotGroup'] as String?,
         foodType: j['foodType'] as String? ?? '',
         isMrp: j['isMrp'] as bool? ?? false,
+        openPrice: j['openPrice'] as bool? ?? false,
+        dailyPrice: j['dailyPrice'] as bool? ?? false,
       );
 }
 
@@ -276,6 +299,15 @@ class OrderLine {
     }
     return b;
   }
+
+  /// This line at a typed price: [base] for one unit of the item (or chosen size), add-ons on top.
+  OrderLine priced(double base) => OrderLine(
+      item: item,
+      variant: variant,
+      addons: [...addons],
+      qty: qty,
+      note: note,
+      unitPrice: base + _resolveUnit(item, variant, addons) - _resolveUnit(item, variant, const []));
 
   double get unit => unitPrice;
   int get activeQty => qty - cancelledQty;

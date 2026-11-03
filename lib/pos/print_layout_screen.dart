@@ -263,7 +263,7 @@ class _PrintLayoutScreenState extends State<PrintLayoutScreen> {
           _switch('Phone number', l.billShowPhone, (v) => l.billShowPhone = v),
           _field('billHeader', 'Extra header lines', hint: 'GSTIN: 32ABCDE1234F1Z5\nFSSAI: 11234567000123', lines: 3),
           _field('billTitlePaid', 'Title when paid', hint: 'TAX INVOICE'),
-          _field('billTitleUnpaid', 'Title before payment', hint: 'BILL · NOT PAID'),
+          _field('billTitleUnpaid', 'Title before payment', hint: 'Empty = no title'),
         ]),
         const SizedBox(height: 14),
         _section('Order details', [

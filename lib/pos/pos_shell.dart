@@ -319,11 +319,6 @@ class _PosShellState extends State<PosShell> {
                 const SizedBox(width: 12),
                 RoundIcon(Icons.keyboard_outlined, size: 44, tooltip: 'Keyboard shortcuts (F12)', onTap: () => showShortcutHelp(context)),
               ],
-              const SizedBox(width: 12),
-              const CircleAvatar(
-                  radius: 25,
-                  backgroundColor: Color(0xFFFFD9A8),
-                  child: Icon(Icons.person_outline, color: Color(0xFF7A4A0C))),
             ]),
             const SizedBox(height: 18),
             for (final w in s.webOrders) _webOrder(s, w),

@@ -11,6 +11,7 @@ import 'captains_screen.dart';
 import 'kot_groups_screen.dart';
 import 'meal_periods_panel.dart';
 import 'menu_editor_screen.dart';
+import 'todays_prices_screen.dart';
 import 'payment_qr_panel.dart';
 import 'print_layout_screen.dart';
 import 'printers_screen.dart';
@@ -219,7 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final children = switch (_sec) {
       _Sec.connection => [_connectionPanel(s)],
       _Sec.menu => [_syncPanel(s), _overviewPanel(s)],
-      _Sec.menuEdit => [_menuEditPanel(s)],
+      _Sec.menuEdit => [_menuEditPanel(s), _todaysPricesPanel(s)],
       _Sec.mealTimes => [const MealPeriodsPanel()],
       _Sec.bills => [_billSyncPanel(s)],
       _Sec.printers => [_printersPanel(s)],
@@ -536,6 +537,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MenuEditorScreen()))),
         ]),
       );
+
+  Widget _todaysPricesPanel(Store s) {
+    final daily = s.menu.where((m) => m.dailyPrice).length;
+    final open = s.menu.where((m) => m.openPrice).length;
+    return Panel(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Today\'s prices', style: ts(17, w: w5)),
+            const SizedBox(height: 4),
+            Text('Update the day\'s rates for items marked "Daily price" in one place. Items marked "Open price" ask for the price each time they are ordered.',
+                style: ts(13, c: C.muted, h: 1.4)),
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              Pill('$daily daily price', bg: C.soft),
+              Pill('$open open price', bg: C.soft),
+            ]),
+          ]),
+        ),
+        Btn.outline('Open',
+            icon: Icons.chevron_right,
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TodaysPricesScreen()))),
+      ]),
+    );
+  }
 
   Widget _printLayoutPanel(Store s) {
     final l = s.printLayout;

@@ -93,7 +93,16 @@ class RemoteCaptainActions implements CaptainActions {
       'phone': phone,
       'lines': [
         for (final l in lines)
-          {'itemId': l.item.id, 'itemName': l.item.name, 'variant': l.variant, 'addons': l.addons, 'qty': l.qty, 'note': l.note}
+          {
+            'itemId': l.item.id,
+            'itemName': l.item.name,
+            'variant': l.variant,
+            'addons': l.addons,
+            'qty': l.qty,
+            'note': l.note,
+            // Only used by the POS for open-price items; everything else is priced from the POS menu.
+            if (l.item.openPrice) 'unitPrice': l.unitPrice,
+          }
       ],
     });
     return SentKot((r['orderId'] as num).toInt(), [for (final k in r['kots'] as List) (k as num).toInt()], r['label'] as String? ?? '');

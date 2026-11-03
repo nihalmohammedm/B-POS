@@ -98,7 +98,7 @@ class PrintLayout {
     this.billShowPhone = true,
     this.billHeader = '',
     this.billTitlePaid = 'TAX INVOICE',
-    this.billTitleUnpaid = 'BILL · NOT PAID',
+    this.billTitleUnpaid = '',
     this.billShowServer = true,
     this.billShowPax = true,
     this.billShowCustomer = true,
@@ -216,7 +216,9 @@ class PrintLayout {
       billShowPhone: b('billShowPhone', d.billShowPhone),
       billHeader: s('billHeader', d.billHeader),
       billTitlePaid: s('billTitlePaid', d.billTitlePaid),
-      billTitleUnpaid: s('billTitleUnpaid', d.billTitleUnpaid),
+      // The pre-payment bill is the one the guest keeps, so the old
+      // 'BILL · NOT PAID' default is dropped from saved layouts too.
+      billTitleUnpaid: s('billTitleUnpaid', d.billTitleUnpaid) == 'BILL · NOT PAID' ? '' : s('billTitleUnpaid', d.billTitleUnpaid),
       billShowServer: b('billShowServer', d.billShowServer),
       billShowPax: b('billShowPax', d.billShowPax),
       billShowCustomer: b('billShowCustomer', d.billShowCustomer),

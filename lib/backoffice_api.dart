@@ -223,6 +223,8 @@ class BackofficeApi {
         kotGroup: groupByProduct[pid],
         foodType: ((p['type'] as String?) ?? '').replaceAll('_', '-'),
         isMrp: p['is_mrp'] as bool? ?? false,
+        openPrice: p['is_open_price'] as bool? ?? false,
+        dailyPrice: p['is_daily_price'] as bool? ?? false,
       ));
     }
 

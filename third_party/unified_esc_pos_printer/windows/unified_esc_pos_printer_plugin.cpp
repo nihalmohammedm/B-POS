@@ -246,6 +246,14 @@ void UnifiedEscPosPrinterPlugin::HandleMethodCall(
       list.push_back(flutter::EncodableValue(m));
     }
     result->Success(flutter::EncodableValue(list));
+  } else if (method == "usbStatus") {
+    // Empty string = ready to print; otherwise why not.
+    auto* name = get_string("name");
+    if (!name) {
+      result->Error("INVALID_ARGS", "name is required");
+      return;
+    }
+    result->Success(flutter::EncodableValue(UsbPrintManager::CheckReady(*name)));
   } else if (method == "usbConnect") {
     auto* name = get_string("name");
     if (!name) {

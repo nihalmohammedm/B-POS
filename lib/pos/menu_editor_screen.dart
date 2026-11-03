@@ -4,6 +4,7 @@ import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'todays_prices_screen.dart';
 
 /// Settings › Menu items: browse this outlet's menu and edit it. Every save goes
 /// to Supabase first (for this outlet only) and then updates the POS, so the
@@ -42,6 +43,13 @@ class _MenuEditorScreenState extends State<MenuEditorScreen> {
               RoundIcon(Icons.arrow_back, onTap: () => Navigator.of(context).maybePop(), tooltip: 'Back'),
               const SizedBox(width: 14),
               Expanded(child: Text('Menu · ${s.menu.length} items', style: ts(22, w: w5))),
+              if (s.menu.any((m) => m.dailyPrice)) ...[
+                Btn.outline('Today\'s prices',
+                    icon: Icons.sell_outlined,
+                    height: 44,
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TodaysPricesScreen()))),
+                const SizedBox(width: 8),
+              ],
               if (canEdit) Btn('Add item', icon: Icons.add, height: 44, onTap: () => showMenuItemSheet(context, null)),
             ]),
             const SizedBox(height: 12),
@@ -113,7 +121,7 @@ class _MenuEditorScreenState extends State<MenuEditorScreen> {
             ]),
           ),
           if (off != null) ...[Pill(off, bg: C.soft, size: 11), const SizedBox(width: 8)],
-          Text('${m.variants.isNotEmpty ? 'from ' : ''}${inr(m.fromPrice)}', style: ts(15, w: w5)),
+          Text(priceLabel(m), style: ts(15, w: w5)),
           const SizedBox(width: 6),
           Icon(canEdit ? Icons.edit_outlined : Icons.chevron_right, size: 18, color: C.muted),
         ]),
@@ -147,7 +155,14 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
   final s = StoreScope.read(context);
   final canEdit = s.canEditMenu;
   final nameC = TextEditingController(text: existing?.name ?? '');
-  final codeC = TextEditingController(text: existing?.code ?? '');
+  final codeC = TextEditingController(text: existing?.code ?? (canEdit ? s.localNextItemCode : ''));
+  if (existing == null && canEdit) {
+    // The backoffice also knows removed items' codes; swap in its answer unless staff already typed one.
+    final guess = codeC.text;
+    s.suggestItemCode().then((c) {
+      if (codeC.text == guess) codeC.text = c;
+    }).catchError((_) {});
+  }
   final descC = TextEditingController(text: existing?.desc ?? '');
   final priceC = TextEditingController(
       text: existing == null || existing.price == 0
@@ -157,6 +172,8 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
   var cat = existing?.cat ?? (s.categories.isNotEmpty ? s.categories.first : '');
   var type = existing?.type ?? 'veg';
   var isMrp = existing?.isMrp ?? false;
+  var openPrice = existing?.openPrice ?? false;
+  var dailyPrice = existing?.dailyPrice ?? false;
   var subCat = existing?.subCat ?? '';
   String? group = existing?.kotGroup;
   var busy = false;
@@ -167,9 +184,10 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
       String? problem() {
         if (nameC.text.trim().isEmpty) return 'Give the item a name';
         if (cat.isEmpty) return 'Pick a category';
-        if (sizes.isEmpty && (parse(priceC) ?? -1) < 0) return 'Enter a price';
+        if (!openPrice && sizes.isEmpty && (parse(priceC) ?? -1) < 0) return 'Enter a price';
         for (final r in sizes) {
-          if (r.name.text.trim().isEmpty || (parse(r.price) ?? -1) < 0) return 'Every size needs a name and a price';
+          if (r.name.text.trim().isEmpty) return 'Every size needs a name';
+          if (!openPrice && (parse(r.price) ?? -1) < 0) return 'Every size needs a price';
         }
         return null;
       }
@@ -180,7 +198,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           toast(ctx, p, error: true);
           return;
         }
-        final vs = [for (final r in sizes) Variant(r.name.text.trim(), parse(r.price)!, kotGroup: r.kotGroup, id: r.id)];
+        final vs = [for (final r in sizes) Variant(r.name.text.trim(), parse(r.price) ?? 0, kotGroup: r.kotGroup, id: r.id)];
         final item = MenuItem(
           id: existing?.id ?? '',
           code: codeC.text.trim(),
@@ -188,7 +206,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           subCat: subCat,
           name: nameC.text.trim(),
           desc: descC.text.trim(),
-          price: vs.isNotEmpty ? vs.first.price : parse(priceC)!,
+          price: vs.isNotEmpty ? vs.first.price : parse(priceC) ?? 0,
           veg: type == 'veg',
           bestseller: existing?.bestseller ?? false,
           variants: vs,
@@ -197,6 +215,8 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           kotGroup: group,
           foodType: type,
           isMrp: isMrp,
+          openPrice: openPrice,
+          dailyPrice: dailyPrice,
         );
         set(() => busy = true);
         try {
@@ -304,6 +324,21 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
             subtitle: Text('Packaged, sold at printed price · no takeaway parcel charge', style: ts(12, c: C.muted)),
             value: isMrp,
             onChanged: ro ? null : (v) => set(() => isMrp = v),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Open price', style: ts(14, w: w5)),
+            subtitle: Text('Price is typed each time it is ordered, e.g. fish by size · the price here is the minimum',
+                style: ts(12, c: C.muted)),
+            value: openPrice,
+            onChanged: ro ? null : (v) => set(() => openPrice = v),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Daily price', style: ts(14, w: w5)),
+            subtitle: Text('Price changes day to day · listed on Today\'s prices for a quick update', style: ts(12, c: C.muted)),
+            value: dailyPrice,
+            onChanged: ro ? null : (v) => set(() => dailyPrice = v),
           ),
           const SizedBox(height: 8),
           const Label('KOT group'),

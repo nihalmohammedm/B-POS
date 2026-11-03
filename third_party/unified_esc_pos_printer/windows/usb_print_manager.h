@@ -26,6 +26,13 @@ class UsbPrintManager {
   // Enumerate local and connected printers via EnumPrintersW.
   static std::vector<PrinterInfo> ListPrinters();
 
+  // Whether [printer_name] can print right now. Returns an empty string when it
+  // can, otherwise a short reason for staff. OpenPrinter/WritePrinter succeed
+  // for any installed printer (the spooler just queues), so this is the only
+  // real check: Windows status flags, stuck jobs, and — for usbmon ports
+  // (USB001…) — whether the USB device is actually plugged in and powered.
+  static std::string CheckReady(const std::string& printer_name);
+
   // Open a printer by name (OpenPrinterW).
   bool Open(const std::string& printer_name);
 

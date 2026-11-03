@@ -26,6 +26,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
     windowsapp
     comctl32
     winspool
+    setupapi
 )
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES

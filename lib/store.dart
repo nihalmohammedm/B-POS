@@ -1091,6 +1091,8 @@ class Store extends ChangeNotifier {
   /// Turns low-level connection exceptions into one short line staff can act on.
   String _plainPrintError(PosPrinter p, Object? e) {
     if (e is String) return e; // already written for people ("No IP address set")
+    // Windows USB readiness check: its message already says what's wrong (paused, out of paper, unplugged…).
+    if (e is esc.PrinterNotFoundException && p.conn == PrinterConn.usb) return e.message;
     final raw = '${e ?? ''}'.toLowerCase();
     if (e is TimeoutException || raw.contains('timeout') || raw.contains('timed out')) {
       return 'Printer not responding. Check it is switched on.';
@@ -1280,6 +1282,19 @@ class Store extends ChangeNotifier {
     notifyListeners();
     return saved;
   }
+
+  /// Item code to prefill for a new item. Asks the backoffice (which knows removed items'
+  /// codes too); offline, falls back to the next number after this POS's menu.
+  Future<String> suggestItemCode() async {
+    final local = localNextItemCode;
+    try {
+      return await (await _menuAdmin()).nextItemCode();
+    } catch (_) {
+      return local;
+    }
+  }
+
+  String get localNextItemCode => MenuAdminApi.nextCode(menu.map((m) => m.code));
 
   Future<void> removeMenuItem(MenuItem m) async {
     await (await _menuAdmin()).deactivateItem(m.id);

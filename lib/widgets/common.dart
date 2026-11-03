@@ -529,3 +529,93 @@ class SumRow extends StatelessWidget {
         ]),
       );
 }
+
+/// Price as shown on menu tiles and lists.
+String priceLabel(MenuItem m) => m.openPrice ? 'Price at order' : '${m.variants.isNotEmpty ? 'from ' : ''}${inr(m.fromPrice)}';
+
+/// Asks the price for one unit of an open-price item ([MenuItem.openPrice], e.g. fish
+/// by size) and returns [l] priced at it, or null if cancelled. Add-on prices go on top.
+/// Big on-screen keys for touch; digits, '.', Backspace and Enter work on a keyboard too.
+Future<OrderLine?> askOpenPrice(BuildContext context, OrderLine l) async {
+  var typed = '';
+  final r = await showPanelDialog<OrderLine>(context,
+      maxWidth: 400,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+            final value = double.tryParse(typed) ?? 0;
+            final min = l.item.basePrice(l.variant);
+            final ok = value > 0 && value >= min;
+            void key(String k) => set(() {
+                  if (k == '⌫') {
+                    if (typed.isNotEmpty) typed = typed.substring(0, typed.length - 1);
+                  } else if (k == '.') {
+                    if (!typed.contains('.')) typed = typed.isEmpty ? '0.' : '$typed.';
+                  } else if (typed.length < 7 && !RegExp(r'\.\d\d$').hasMatch(typed)) {
+                    typed = typed == '0' ? k : typed + k;
+                  }
+                });
+            void done() {
+              if (ok) Navigator.pop(ctx, l.priced(value));
+            }
+
+            Widget pad(String k) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Material(
+                      color: C.soft,
+                      borderRadius: BorderRadius.circular(14),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => key(k),
+                        child: SizedBox(height: 60, child: Center(child: Text(k, style: ts(24, w: w5)))),
+                      ),
+                    ),
+                  ),
+                );
+            final addons = l.priced(0).unitPrice;
+            return KeyScope(
+              autofocus: true,
+              keys: [
+                for (final k in const ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.']) Hotkey(CharacterActivator(k), () => key(k)),
+                Hotkey(const SingleActivator(LogicalKeyboardKey.backspace), () => key('⌫')),
+                Hotkey(const SingleActivator(LogicalKeyboardKey.enter), done),
+                Hotkey(const SingleActivator(LogicalKeyboardKey.numpadEnter), done),
+              ],
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Text('Price · ${l.item.name}', style: ts(19, w: w5)),
+                  Text([if (l.variant != null) l.variant!, 'price for 1', if (addons > 0) 'add-ons +${inr(addons, decimals: true)}'].join(' · '),
+                      style: ts(13, c: C.muted)),
+                  const SizedBox(height: 12),
+                  Container(
+                    height: 64,
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    decoration: BoxDecoration(border: Border.all(color: C.ink, width: 2), borderRadius: BorderRadius.circular(14)),
+                    child: Text('₹ ${typed.isEmpty ? '0' : typed}', style: ts(30, w: w6, c: typed.isEmpty ? C.muted : C.ink)),
+                  ),
+                  if (min > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text('Minimum ${inr(min, decimals: true)}',
+                          textAlign: TextAlign.right,
+                          style: ts(13, w: w5, c: value > 0 && value < min ? C.red : C.muted)),
+                    ),
+                  const SizedBox(height: 10),
+                  for (final row in const [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['.', '0', '⌫']])
+                    Row(children: [for (final k in row) pad(k)]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(child: Btn.outline('Cancel', expand: true, onTap: () => Navigator.pop(ctx))),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        flex: 2,
+                        child: Btn(ok ? 'Add · ${inr(l.priced(value).total, decimals: true)}' : (value > 0 ? 'Below minimum' : 'Enter price'),
+                            expand: true, onTap: ok ? done : null)),
+                  ]),
+                ]),
+              ),
+            );
+          }));
+  return r;
+}

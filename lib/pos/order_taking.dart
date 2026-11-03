@@ -140,20 +140,21 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       toast(context, 'No more ${m.name} in stock', error: true);
       return;
     }
-    if (m.customizable) {
-      final l = await showCustomizeDialog(context, m);
+    var l = m.customizable ? await showCustomizeDialog(context, m) : OrderLine(item: m);
+    if (l == null || !mounted) return;
+    if (m.openPrice) {
+      l = await askOpenPrice(context, l);
       if (l == null || !mounted) return;
-      // Stock may have moved while the dialog was open; never take more than is left.
-      final room = s.stockLeft(m, cart);
-      if (room != null && l.qty > room) {
-        if (room <= 0) return;
-        l.qty = room;
-        toast(context, 'Only $room ${m.name} left', error: true);
-      }
-      setState(() => _merge(l));
-    } else {
-      setState(() => _merge(OrderLine(item: m)));
     }
+    // Stock may have moved while a dialog was open; never take more than is left.
+    final room = s.stockLeft(m, cart);
+    if (room != null && l.qty > room) {
+      if (room <= 0) return;
+      l.qty = room;
+      toast(context, 'Only $room ${m.name} left', error: true);
+    }
+    final line = l;
+    setState(() => _merge(line));
   }
 
   /// One more of [l] if stock allows, else says so. Used by the + button and the + key.
@@ -168,7 +169,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
 
   void _merge(OrderLine l) {
     for (final c in cart) {
-      if (c.sameConfig(l)) {
+      if (c.sameConfig(l) && c.unitPrice == l.unitPrice) {
         c.qty += l.qty;
         return;
       }
@@ -681,7 +682,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
               ]),
               const Spacer(),
               Row(children: [
-                Text('${m.variants.isNotEmpty ? 'from ' : ''}${inr(m.fromPrice)}', style: ts(15, w: w6)),
+                Text(priceLabel(m), style: ts(15, w: w6)),
                 const Spacer(),
                 Container(
                   width: 32,

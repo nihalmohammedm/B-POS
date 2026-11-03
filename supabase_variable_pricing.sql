@@ -1,7 +1,7 @@
 -- Variable pricing. Idempotent: safe to run more than once.
 --
 --   * products.is_open_price  - price is typed when the item is ordered (e.g. fish by size).
---                               base_price / variant prices are only a guide for staff.
+--                               base_price / variant prices are the minimum staff can type.
 --   * products.is_daily_price - price changes day to day; listed on the POS "Today's prices"
 --                               screen, which updates base_price / product_variants.price in place.
 --

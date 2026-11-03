@@ -664,6 +664,9 @@ Future<void> settleFlow(BuildContext context, Order o,
     {bool print = true}) async {
   final s = StoreScope.read(context);
   final label = s.labelOf(o);
+  // The guest already holds the printed bill (with the pay QR), so settling
+  // it doesn't print a second copy.
+  if (o.billed) print = false;
   List<Payment>? pays;
   if (o.isPaid && o.payments.isNotEmpty) {
     // Paid up front: the paid invoice was printed then; just close the order.

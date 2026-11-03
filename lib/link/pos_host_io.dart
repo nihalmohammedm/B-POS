@@ -324,13 +324,25 @@ class PosHost {
           (throw LinkRefused('${l['itemName'] ?? 'An item'} is no longer on the menu'));
       final off = s.offReason(m);
       if (off != null) throw LinkRefused('${m.name}: $off');
-      lines.add(OrderLine(
+      final line = OrderLine(
         item: m,
         variant: l['variant'] as String?,
         addons: (l['addons'] as List? ?? const []).cast<String>(),
         qty: (l['qty'] as num).toInt(),
         note: l['note'] as String? ?? '',
-      ));
+      );
+      if (m.openPrice) {
+        // The captain typed this price at the table; it's the only price the POS takes from a captain.
+        final typed = (l['unitPrice'] as num?)?.toDouble();
+        if (typed == null || typed <= 0) throw LinkRefused('${m.name} needs a price · update the captain app');
+        // The menu price is the floor. [line] was priced from the POS menu, add-ons included, like [typed].
+        final floor = line.unitPrice;
+        if (typed < floor) throw LinkRefused('${m.name}: price can\'t be below ${floor.toStringAsFixed(floor == floor.roundToDouble() ? 0 : 2)}');
+        lines.add(OrderLine(
+            item: m, variant: line.variant, addons: line.addons, qty: line.qty, note: line.note, unitPrice: typed));
+      } else {
+        lines.add(line);
+      }
     }
     if (lines.isEmpty) throw LinkRefused('No items to send');
     if (o.type != OrderType.dineIn) {

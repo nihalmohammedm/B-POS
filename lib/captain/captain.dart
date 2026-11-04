@@ -1291,11 +1291,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                             ),
                           ]),
                           const SizedBox(height: 8),
-                          TextFormField(
-                            initialValue: l.note,
-                            onChanged: (v) => l.note = v,
-                            decoration: const InputDecoration(hintText: 'Add kitchen note', fillColor: C.soft2),
-                          ),
+                          _CartNote(l),
                         ]),
                       ),
                   ]),
@@ -1322,5 +1318,41 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                 ),
               ]);
             }));
+  }
+}
+
+/// Kitchen note for one cart line: the item's preset notes as tap-to-select tiles, plus free text.
+class _CartNote extends StatefulWidget {
+  final OrderLine line;
+  const _CartNote(this.line);
+  @override
+  State<_CartNote> createState() => _CartNoteState();
+}
+
+class _CartNoteState extends State<_CartNote> {
+  late final c = TextEditingController(text: widget.line.note);
+
+  @override
+  void dispose() {
+    c.dispose();
+    super.dispose();
+  }
+
+  void _set(String v) => setState(() => widget.line.note = v);
+
+  @override
+  Widget build(BuildContext context) {
+    final presets = widget.line.item.kitchenNotes;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (presets.isNotEmpty) ...[
+        NoteChips(presets: presets, note: c.text, onChanged: (v) => _set(c.text = v)),
+        const SizedBox(height: 8),
+      ],
+      TextField(
+        controller: c,
+        onChanged: _set,
+        decoration: const InputDecoration(hintText: 'Add kitchen note', fillColor: C.soft2),
+      ),
+    ]);
   }
 }

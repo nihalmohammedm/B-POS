@@ -14,6 +14,7 @@ import 'link/link_models.dart';
 import 'print_layout.dart';
 import 'sync/bill_sync_api.dart';
 import 'sync/menu_admin_api.dart';
+import 'sync/outlet_config_api.dart';
 import 'sync/web_order_api.dart';
 
 class Store extends ChangeNotifier {
@@ -67,6 +68,7 @@ class Store extends ChangeNotifier {
     this.roleName = roleName;
     this.permissions = permissions;
     notifyListeners();
+    syncOutletConfig();
   }
 
   void clearSession() {
@@ -128,11 +130,15 @@ class Store extends ChangeNotifier {
   Future<void> _loadPersisted() async {
     backofficeUrl = await _getSetting('backofficeUrl') ?? backofficeUrl;
     backofficeKey = await _getSetting('backofficeKey') ?? backofficeKey;
-    backofficeOutletCode = await _getSetting('backofficeOutletCode') ?? backofficeOutletCode;
+    final savedOutlet = await _getSetting('backofficeOutletCode');
+    backofficeOutletCode = savedOutlet ?? backofficeOutletCode;
+    // Tills set up before the outlet picker existed already belong to their outlet.
+    outletBound = savedOutlet != null || await _getSetting('lastMenuSync') != null;
     webMenuBaseUrl = await _getSetting('webMenuBaseUrl') ?? webMenuBaseUrl;
     outletName = await _getSetting('outletName') ?? outletName;
     outletAddress = await _getSetting('outletAddress') ?? outletAddress;
     outletPhone = await _getSetting('outletPhone') ?? outletPhone;
+    outletConfigDirty = await _getSetting('outletConfigDirty') == '1';
     await _loadKotConfig();
     await _loadCaptains();
     final periodsStr = await _getSetting('mealPeriods');
@@ -325,6 +331,7 @@ class Store extends ChangeNotifier {
     } catch (_) {
       // lastSyncError is already set by syncMenu; Settings surfaces it.
     }
+    await syncOutletConfig();
     await _syncPendingBills();
   }
 
@@ -368,6 +375,8 @@ class Store extends ChangeNotifier {
     billSyncStatus[orderId] = _statusOf(PendingBillSyncRow(orderId: orderId, status: status, attempts: attempts, lastError: error));
     notifyListeners();
   }
+
+  Future<String> resolveOutletId() => _resolveOutletId();
 
   Future<String> _resolveOutletId() async {
     if (_cachedOutletId != null && _cachedOutletIdForCode == backofficeOutletCode) return _cachedOutletId!;
@@ -481,6 +490,71 @@ class Store extends ChangeNotifier {
     mealPeriods = List.of(v);
     notifyListeners();
     _setSetting('mealPeriods', jsonEncode(mealPeriods.map((p) => p.toJson()).toList()));
+    _markOutletConfigDirty();
+  }
+
+  // ---------- outlet config (Supabase bpos.outlet_settings) ----------
+  // Print layout (with the payment-QR UPI IDs) and meal periods are outlet-wide, so they
+  // live in Supabase and every till of the outlet shares them. A local edit is saved here
+  // first and uploaded as soon as possible; until it is, [outletConfigDirty] holds it and
+  // downloads don't overwrite it. Printers and KOT routing stay per device.
+
+  /// Local print layout / meal period edits not uploaded yet.
+  bool outletConfigDirty = false;
+  String? outletConfigError;
+  bool _syncingOutletConfig = false;
+
+  void _markOutletConfigDirty() {
+    if (mirror) return;
+    outletConfigDirty = true;
+    _setSetting('outletConfigDirty', '1');
+    syncOutletConfig();
+  }
+
+  /// Uploads local edits if there are any, otherwise takes the outlet's saved config.
+  /// Needs a signed-in user; quietly waits for the next try when offline.
+  Future<void> syncOutletConfig() async {
+    final token = sessionAccessToken;
+    if (mirror || token == null || !isOnline || _syncingOutletConfig) return;
+    _syncingOutletConfig = true;
+    try {
+      final api = OutletConfigApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: token);
+      final outletId = await _resolveOutletId();
+      if (outletConfigDirty) {
+        await api.save(outletId, {
+          'print_layout': printLayout.toJson(),
+          'meal_periods': mealPeriods.map((p) => p.toJson()).toList(),
+        });
+        outletConfigDirty = false;
+        await _setSetting('outletConfigDirty', '0');
+      } else {
+        final row = await api.fetch(outletId);
+        // Nothing saved for the outlet yet (tills set up before this lived in Supabase):
+        // this till's setup becomes the outlet's, if the user may change settings.
+        final missing = {
+          if (row?['print_layout'] == null) 'print_layout': printLayout.toJson(),
+          if (row?['meal_periods'] == null) 'meal_periods': mealPeriods.map((p) => p.toJson()).toList(),
+        };
+        if (missing.isNotEmpty && can('settings.manage')) await api.save(outletId, missing);
+        // A newer local edit made while the download was in flight wins.
+        if (row != null && !outletConfigDirty) {
+          if (row['print_layout'] case final Map<String, dynamic> l) {
+            printLayout = PrintLayout.fromJson(l);
+            await _setSetting('printLayout', jsonEncode(printLayout.toJson()));
+          }
+          if (row['meal_periods'] case final List<dynamic> p) {
+            mealPeriods = p.map((e) => MealPeriod.fromJson(e as Map<String, dynamic>)).toList();
+            await _setSetting('mealPeriods', jsonEncode(mealPeriods.map((m) => m.toJson()).toList()));
+          }
+        }
+      }
+      outletConfigError = null;
+    } catch (e) {
+      outletConfigError = plainError(e);
+    } finally {
+      _syncingOutletConfig = false;
+      notifyListeners();
+    }
   }
 
   /// The period running at [now], or null when none is set up / none covers this time.
@@ -503,6 +577,7 @@ class Store extends ChangeNotifier {
     printLayout = l.copy();
     notifyListeners();
     _setSetting('printLayout', jsonEncode(printLayout.toJson()));
+    _markOutletConfigDirty();
   }
 
   /// Edits the UPI IDs / pay-QR switch on its own, straight from Settings, and
@@ -1182,6 +1257,82 @@ class Store extends ChangeNotifier {
   bool syncingMenu = false;
   MenuSyncResult? lastSyncResult;
   String? lastSyncError;
+
+  /// True once this till has been given an outlet (picked at sign-in, or set up before the
+  /// picker existed). Until then the first multi-outlet sign-in asks which outlet it is.
+  bool outletBound = false;
+
+  /// Why this till can't move to another outlet right now, or null when it can. Its local
+  /// data belongs to one outlet, so it must have nothing open and nothing waiting to upload.
+  String? get outletSwitchBlocker {
+    if (orders.isNotEmpty) {
+      return '${orders.length} open ${orders.length == 1 ? 'order' : 'orders'} on this till. Settle or cancel them first.';
+    }
+    final waiting = billSyncStatus.values.where((b) => b.state != BillSyncState.synced).length;
+    if (waiting > 0) {
+      return '$waiting settled ${waiting == 1 ? 'bill has' : 'bills have'} not uploaded yet. Check Settings → Settled bills.';
+    }
+    if (outletConfigDirty) return 'Print layout / meal period changes have not uploaded yet. Connect to the internet and try again.';
+    return null;
+  }
+
+  /// Makes this till [code]'s POS. Moving to a different outlet wipes the old outlet's local
+  /// menu, tables, KOT routing, bill history and paired captains (everything settled is
+  /// already uploaded, see [outletSwitchBlocker]), then pulls the new outlet's menu.
+  /// Printers, print layout and bill/KOT counters stay with the device.
+  /// Returns why it couldn't switch, or null.
+  Future<String?> switchOutlet(String code) async {
+    if (code == backofficeOutletCode) {
+      if (!outletBound) {
+        outletBound = true;
+        await _saveBackofficeConfig();
+      }
+      return null;
+    }
+    final blocked = outletSwitchBlocker;
+    if (blocked != null) return blocked;
+
+    menu.clear();
+    categories = [];
+    subCatTree = {};
+    kotGroups = [];
+    kotRoutes.clear();
+    tables.clear();
+    kots.clear();
+    history.clear();
+    itemOff.clear();
+    catOff.clear();
+    stock.clear();
+    webOrders.clear();
+    billRequests.clear();
+    mealPeriods = [];
+    outletName = outletAddress = outletPhone = '';
+    lastMenuSync = null;
+    lastSyncResult = null;
+    billSyncStatus.clear();
+    await _db.delete(_db.pendingBillSyncRows).go();
+    for (final d in [...captainDevices]) {
+      removeCaptain(d.id);
+    }
+
+    backofficeOutletCode = code;
+    _cachedOutletId = null;
+    outletBound = true;
+    await _saveBackofficeConfig();
+    await _saveMenu();
+    await _saveKotConfig();
+    await _setSetting('mealPeriods', '[]');
+    await _saveOperational();
+    notifyListeners();
+    try {
+      await syncMenu();
+    } catch (_) {
+      // Stays empty with lastSyncError set; Settings surfaces it for a retry.
+    }
+    // The new outlet's print layout and meal periods (the layout is kept if it has none).
+    await syncOutletConfig();
+    return null;
+  }
 
   void setBackofficeConfig({String? url, String? key, String? outletCode}) {
     if (url != null) backofficeUrl = url;

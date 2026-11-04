@@ -33,6 +33,12 @@ class ProfileInfo {
   });
 }
 
+/// An outlet the signed-in user is linked to through `outlet_users`.
+class OutletChoice {
+  final String id, code, name;
+  const OutletChoice({required this.id, required this.code, required this.name});
+}
+
 /// Talks to Supabase Auth (GoTrue) and reads the matching `bpos` profile/role rows.
 /// Sibling to [BackofficeApi] (same host, same `bpos` schema), but this one carries
 /// a signed-in user's own access token instead of the shared anon key wherever the
@@ -112,6 +118,29 @@ class SupabaseAuthApi {
     final rows = await _get('', 'outlets', {'select': 'id', 'code': 'eq.$outletCode', 'limit': '1'});
     if (rows.isEmpty) throw AuthException('No outlet found with code "$outletCode"');
     return rows.first['id'] as String;
+  }
+
+  /// Every outlet the signed-in user has an active `outlet_users` link to, by name.
+  Future<List<OutletChoice>> fetchUserOutlets({required String accessToken, required String authUserId}) async {
+    final users = await _get(accessToken, 'users', {'select': 'id', 'auth_user_id': 'eq.$authUserId', 'limit': '1'});
+    if (users.isEmpty) {
+      throw AuthException('This login has no staff profile. Ask the owner to add you.');
+    }
+    final links = await _get(accessToken, 'outlet_users', {
+      'select': 'outlet_id',
+      'user_id': 'eq.${users.first['id']}',
+      'is_active': 'eq.true',
+    });
+    final ids = {for (final r in links) r['outlet_id'] as String};
+    if (ids.isEmpty) return [];
+    // Names come from `outlets` the same way [resolveOutletId] reads it (anon key):
+    // signed-in users aren't necessarily granted that table, and embedding it in the
+    // outlet_users query above made the whole sign-in fail with "Not allowed".
+    final rows = await _get('', 'outlets', {'select': 'id,code,name', 'id': 'in.(${ids.join(',')})'});
+    return [
+      for (final o in rows)
+        OutletChoice(id: o['id'] as String, code: o['code'] as String? ?? '', name: o['name'] as String? ?? ''),
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
   /// The signed-in user's staff profile for [outletId]: name, role, permissions.

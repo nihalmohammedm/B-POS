@@ -11,6 +11,7 @@ import '../widgets/common.dart';
 import '../widgets/printer_status.dart';
 import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
+import '../auth/outlet_picker.dart';
 import 'kitchen_screen.dart';
 import 'order_taking.dart';
 import 'orders_screen.dart';
@@ -20,7 +21,11 @@ import 'settings_screen.dart';
 import 'tables_screen.dart';
 
 class PosShell extends StatefulWidget {
-  const PosShell({super.key});
+  /// Ends the signed-in session (see AuthGate): [forget] also removes this user's saved
+  /// login and PIN from the till; otherwise it just locks back to the PIN screen.
+  /// Null where there's no sign-in (demo launcher), which hides the button.
+  final Future<void> Function({required bool forget})? onSignOut;
+  const PosShell({super.key, this.onSignOut});
   @override
   State<PosShell> createState() => _PosShellState();
 }
@@ -206,6 +211,34 @@ class _PosShellState extends State<PosShell> {
         _gen++;
       });
 
+  /// Lock keeps this user's login on the till (PIN gets them back in); Sign out removes it.
+  /// Open orders belong to the till, not the user, so neither touches them.
+  Future<void> _askSignOut(Store s) async {
+    final forget = await showPanelDialog<bool>(context,
+        maxWidth: 420,
+        builder: (ctx) => Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Text('Sign out', style: ts(20, w: w5)),
+                const SizedBox(height: 4),
+                Text('${s.sessionFullName ?? ''}${s.roleName == null ? '' : ' · ${s.roleName}'}', style: ts(14, c: C.muted)),
+                const SizedBox(height: 20),
+                Btn('Lock till', icon: Icons.lock_outline, expand: true, onTap: () => Navigator.pop(ctx, false)),
+                const SizedBox(height: 6),
+                Text('Back to the PIN screen. Your PIN signs you in again.', style: ts(12, c: C.muted)),
+                const SizedBox(height: 16),
+                Btn('Sign out of this till', icon: Icons.logout, bg: C.red, expand: true, onTap: () => Navigator.pop(ctx, true)),
+                const SizedBox(height: 6),
+                Text('Removes your login and PIN from this till. Next time, sign in with email and password.',
+                    style: ts(12, c: C.muted)),
+                const SizedBox(height: 16),
+                Btn.outline('Cancel', expand: true, onTap: () => Navigator.pop(ctx)),
+              ]),
+            ));
+    if (forget == null || !mounted) return;
+    await widget.onSignOut!(forget: forget);
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = StoreScope.of(context);
@@ -271,21 +304,31 @@ class _PosShellState extends State<PosShell> {
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(children: [
-                    Container(
-                      padding: const EdgeInsets.fromLTRB(5, 5, 10, 5),
-                      decoration: BoxDecoration(
-                          color: Colors.white, borderRadius: BorderRadius.circular(999), border: Border.all(color: C.line)),
-                      child: Row(children: [
-                        CircleAvatar(
-                            radius: 19,
-                            backgroundColor: C.sky,
-                            child: Text(s.outletName.isEmpty ? '·' : s.outletName[0].toUpperCase(),
-                                style: const TextStyle(color: Colors.white, fontWeight: w5))),
-                        const SizedBox(width: 10),
-                        Text(s.outletName.isEmpty ? 'Loading…' : s.outletName, style: ts(16, w: w5)),
-                        const SizedBox(width: 10),
-                        const Pill('OPEN', fg: C.greenInk, leading: Dot(color: Color(0xFF34A853), size: 6)),
-                      ]),
+                    Material(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(999),
+                      // Tap: switch outlet, for staff who work at more than one.
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: () => showSwitchOutlet(context),
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(5, 5, 10, 5),
+                          decoration: BoxDecoration(borderRadius: BorderRadius.circular(999), border: Border.all(color: C.line)),
+                          child: Row(children: [
+                            CircleAvatar(
+                                radius: 19,
+                                backgroundColor: C.sky,
+                                child: Text(s.outletName.isEmpty ? '·' : s.outletName[0].toUpperCase(),
+                                    style: const TextStyle(color: Colors.white, fontWeight: w5))),
+                            const SizedBox(width: 10),
+                            Text(s.outletName.isEmpty ? 'Loading…' : s.outletName, style: ts(16, w: w5)),
+                            const SizedBox(width: 10),
+                            const Pill('OPEN', fg: C.greenInk, leading: Dot(color: Color(0xFF34A853), size: 6)),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.expand_more, size: 18, color: C.muted),
+                          ]),
+                        ),
+                      ),
                     ),
                     if (wide) ...[
                       const SizedBox(width: 14),
@@ -318,6 +361,14 @@ class _PosShellState extends State<PosShell> {
               if (hasKeyboard) ...[
                 const SizedBox(width: 12),
                 RoundIcon(Icons.keyboard_outlined, size: 44, tooltip: 'Keyboard shortcuts (F12)', onTap: () => showShortcutHelp(context)),
+              ],
+              if (widget.onSignOut != null) ...[
+                const SizedBox(width: 12),
+                RoundIcon(Icons.logout,
+                    size: 44,
+                    fg: C.redInk,
+                    tooltip: 'Sign out${s.sessionFullName == null ? '' : ' · ${s.sessionFullName}'}',
+                    onTap: () => _askSignOut(s)),
               ],
             ]),
             const SizedBox(height: 18),

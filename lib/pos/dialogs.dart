@@ -89,14 +89,14 @@ Future<OrderLine?> showCustomizeDialog(BuildContext context, MenuItem m, {OrderL
                     ],
                     Text('Kitchen note', style: ts(15, w: w5)),
                     const SizedBox(height: 8),
-                    TextField(controller: noteC, decoration: const InputDecoration(hintText: 'e.g. Extra spicy, sauce on side')),
-                    const SizedBox(height: 10),
-                    Wrap(spacing: 6, runSpacing: 6, children: [
-                      for (final q in quickNotes)
-                        ActionChip(
-                            label: Text(q),
-                            onPressed: () => set(() => noteC.text = noteC.text.isEmpty ? q : '${noteC.text}, $q')),
-                    ]),
+                    if (quickNotes.isNotEmpty) ...[
+                      NoteChips(presets: quickNotes, note: noteC.text, onChanged: (v) => set(() => noteC.text = v)),
+                      const SizedBox(height: 10),
+                    ],
+                    TextField(
+                        controller: noteC,
+                        onChanged: (_) => set(() {}),
+                        decoration: const InputDecoration(hintText: 'e.g. Extra spicy, sauce on side')),
                   ]),
                 ),
               ),
@@ -201,12 +201,11 @@ Future<OrderLine?> showNoteDialog(BuildContext context, OrderLine l) {
                   const SizedBox(height: 18),
                   Text('Kitchen note', style: ts(14, w: w5)),
                   const SizedBox(height: 8),
-                  Wrap(spacing: 6, runSpacing: 6, children: [
-                    for (final q in quickNotes)
-                      ActionChip(label: Text(q), onPressed: () => set(() => c.text = c.text.isEmpty ? q : '${c.text}, $q')),
-                  ]),
-                  const SizedBox(height: 8),
-                  TextField(controller: c, maxLines: 3, decoration: const InputDecoration(hintText: 'e.g. No onions, extra spicy')),
+                  if (quickNotes.isNotEmpty) ...[
+                    NoteChips(presets: quickNotes, note: c.text, onChanged: (v) => set(() => c.text = v)),
+                    const SizedBox(height: 10),
+                  ],
+                  TextField(controller: c, maxLines: 3, onChanged: (_) => set(() {}), decoration: const InputDecoration(hintText: 'e.g. No onions, extra spicy')),
                   const SizedBox(height: 20),
                   Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                     Btn.outline('Cancel', height: 44, onTap: () => Navigator.pop(ctx)),

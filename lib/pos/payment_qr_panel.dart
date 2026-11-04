@@ -20,6 +20,8 @@ class PaymentQrPanel extends StatelessWidget {
         Text('Payment QR', style: ts(17, w: w5)),
         const SizedBox(height: 4),
         Text('The QR carries the bill amount, so the guest only confirms in their UPI app.', style: ts(13, c: C.muted, h: 1.4)),
+        const SizedBox(height: 6),
+        const OutletConfigStatus(),
         const SizedBox(height: 10),
         InkWell(
           borderRadius: BorderRadius.circular(12),

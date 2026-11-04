@@ -343,6 +343,58 @@ class Choice extends StatelessWidget {
       );
 }
 
+/// An item's kitchen-note presets as on/off tiles. The note stays free text: a preset is
+/// on while it is one of the comma-separated parts, and a tap adds or removes just that part.
+class NoteChips extends StatelessWidget {
+  final List<String> presets;
+  final String note;
+  final ValueChanged<String> onChanged;
+  const NoteChips({super.key, required this.presets, required this.note, required this.onChanged});
+
+  static List<String> _parts(String note) => [
+        for (final p in note.split(','))
+          if (p.trim().isNotEmpty) p.trim()
+      ];
+
+  static String toggle(String note, String preset) {
+    final parts = _parts(note);
+    final i = parts.indexWhere((p) => p.toLowerCase() == preset.toLowerCase());
+    i >= 0 ? parts.removeAt(i) : parts.add(preset);
+    return parts.join(', ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (presets.isEmpty) return const SizedBox.shrink();
+    final on = {for (final p in _parts(note)) p.toLowerCase()};
+    return Wrap(spacing: 8, runSpacing: 8, children: [
+      for (final q in presets)
+        Choice(q, on: on.contains(q.toLowerCase()), height: 44, width: 64, fontSize: 15, onTap: () => onChanged(toggle(note, q))),
+    ]);
+  }
+}
+
+/// Whether the outlet-wide settings (print layout, payment QR, meal periods) are saved in
+/// Supabase for every till, or still only on this one.
+class OutletConfigStatus extends StatelessWidget {
+  const OutletConfigStatus({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final s = StoreScope.of(context);
+    final err = s.outletConfigError;
+    final (text, color) = s.outletConfigDirty
+        ? (err == null ? 'Saved on this till · uploading…' : 'Saved on this till only · $err', C.amberInk)
+        : err != null
+            ? ('Could not check the server · $err', C.muted)
+            : ('Saved for every till of this outlet', C.greenInk);
+    return Row(children: [
+      Icon(s.outletConfigDirty ? Icons.cloud_upload_outlined : Icons.cloud_done_outlined, size: 16, color: color),
+      const SizedBox(width: 6),
+      Flexible(child: Text(text, style: ts(12, w: w5, c: color))),
+    ]);
+  }
+}
+
 OverlayEntry? _toastEntry;
 
 /// Short status message, bottom centre, as wide as its text. Drawn on the root

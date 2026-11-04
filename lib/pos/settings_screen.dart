@@ -71,8 +71,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
-  void _saveConnection(Store s) {
-    s.setBackofficeConfig(url: _url.text.trim(), key: _key.text.trim(), outletCode: _outlet.text.trim());
+  Future<void> _saveConnection(Store s) async {
+    s.setBackofficeConfig(url: _url.text.trim(), key: _key.text.trim());
+    final code = _outlet.text.trim();
+    // A new outlet code moves the till: same checks and clean-up as Switch outlet.
+    final err = code.isEmpty || code == s.backofficeOutletCode ? null : await s.switchOutlet(code);
+    if (!mounted) return;
+    if (err != null) {
+      _outlet.text = s.backofficeOutletCode;
+      toast(context, "Outlet not changed · $err", error: true);
+      return;
+    }
     toast(context, 'Backoffice connection saved');
   }
 

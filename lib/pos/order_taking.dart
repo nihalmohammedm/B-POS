@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart' hide Thumb;
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
@@ -62,6 +63,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   final searchF = FocusNode(debugLabel: 'menu search');
   final cart = <OrderLine>[];
   final _tick = ValueNotifier(0);
+  final _menuScroll = ScrollController();
+  // Section headers of the open category's sub-categories, for the jump chips.
+  final _subKeys = <String, GlobalKey>{};
+  static const _subBarH = 56.0;
 
   @override
   void setState(VoidCallback fn) {
@@ -127,6 +132,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     addrF.dispose();
     searchC.dispose();
     searchF.dispose();
+    _menuScroll.dispose();
     _clock?.cancel();
     _tick.dispose();
     super.dispose();
@@ -460,7 +466,8 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     for (final l in cart) {
       qtyBy[l.item.id] = (qtyBy[l.item.id] ?? 0) + l.qty;
     }
-    return CustomScrollView(slivers: [
+    final subs = _subsWithItems(s, items);
+    return CustomScrollView(controller: _menuScroll, slivers: [
       SliverToBoxAdapter(
         child: Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('Menu', style: ts(22, w: w5)),
@@ -517,6 +524,8 @@ class _OrderTakingState extends State<OrderTakingScreen> {
           ]),
         ),
       ),
+      if (subs.isNotEmpty)
+        SliverPersistentHeader(pinned: true, delegate: _PinnedBar(_subBarH, _subBar(items, subs))),
       ..._itemSlivers(s, items, qtyBy),
       if (items.isEmpty)
         SliverToBoxAdapter(
@@ -538,12 +547,11 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     final out = <Widget>[];
     final loose = items.where((m) => m.subCat.isEmpty).toList();
     if (loose.isNotEmpty) out.add(grid(loose));
-    final subs = [...s.subCatsIn(cat!)]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    for (final sc in subs) {
+    for (final sc in _subsWithItems(s, items)) {
       final list = items.where((m) => m.subCat == sc).toList();
-      if (list.isEmpty) continue;
       out.add(SliverToBoxAdapter(
         child: Padding(
+          key: _subKeys.putIfAbsent(sc, GlobalKey.new),
           padding: const EdgeInsets.fromLTRB(4, 20, 4, 10),
           child: Row(children: [
             Text(sc, style: ts(15, w: w6, c: C.ink2)),
@@ -558,6 +566,56 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     }
     return out;
   }
+
+  /// Sub-categories of the open category that have items on screen, in section order.
+  List<String> _subsWithItems(Store s, List<MenuItem> items) {
+    if (cat == null) return const [];
+    final shown = {for (final m in items) m.subCat};
+    return [for (final sc in s.subCatsIn(cat!)) if (shown.contains(sc)) sc]
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
+  /// Scrolls the menu so [sc]'s section header sits just under the pinned chip bar.
+  void _jumpToSub(String sc) {
+    final ro = _subKeys[sc]?.currentContext?.findRenderObject();
+    if (ro == null || !_menuScroll.hasClients) return;
+    final p = _menuScroll.position;
+    final to = (RenderAbstractViewport.of(ro).getOffsetToReveal(ro, 0).offset - _subBarH)
+        .clamp(p.minScrollExtent, p.maxScrollExtent);
+    _menuScroll.animateTo(to, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+  }
+
+  Widget _subBar(List<MenuItem> items, List<String> subs) => Container(
+        color: C.bg,
+        alignment: Alignment.centerLeft,
+        child: SizedBox(
+          height: 44,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            for (final sc in subs)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(999),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(999),
+                    onTap: () => _jumpToSub(sc),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(borderRadius: BorderRadius.circular(999), border: Border.all(color: C.ink2)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(sc, style: ts(14, w: w5)),
+                        const SizedBox(width: 6),
+                        Text('${items.where((m) => m.subCat == sc).length}', style: ts(12, c: C.muted)),
+                      ]),
+                    ),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      );
 
   Widget _catChip(Store s, String? c) {
     final on = cat == c;
@@ -955,11 +1013,16 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(l.item.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: ts(14, w: w5)),
-              if (l.optText.isNotEmpty) Text(l.optText, maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: C.skyInk)),
-              if (l.note.isNotEmpty) Text('Note: ${l.note}', maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: C.amberInk)),
-            ]),
+            child: InkWell(
+              onTap: () => editLine(l),
+              borderRadius: BorderRadius.circular(8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(l.item.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: ts(14, w: w5)),
+                if (l.optText.isNotEmpty) Text(l.optText, maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: C.skyInk)),
+                if (l.note.isNotEmpty) Text('Note: ${l.note}', maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(12, c: C.amberInk)),
+                if (l.note.isEmpty && l.item.kitchenNotes.isNotEmpty) Text('Tap to add note', style: ts(12, c: C.muted)),
+              ]),
+            ),
           ),
           const SizedBox(width: 8),
           QtyStepper(
@@ -972,7 +1035,6 @@ class _OrderTakingState extends State<OrderTakingScreen> {
             onInc: () => _incLine(StoreScope.read(context), l),
           ),
           SizedBox(width: 62, child: Text(inr(l.total), textAlign: TextAlign.right, style: ts(14, w: w5))),
-          RoundIcon(Icons.edit_outlined, size: 34, onTap: () => editLine(l), tooltip: 'Edit'),
           RoundIcon(Icons.delete_outline, size: 34, fg: C.red, onTap: () => setState(() => cart.remove(l)), tooltip: 'Delete'),
         ]),
       );
@@ -980,14 +1042,22 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   Widget _lineRow(OrderLine l) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(child: Text(l.item.name, style: ts(15, w: w5))),
-            Text(inr(l.total), style: ts(15, w: w5)),
-          ]),
-          if (l.optText.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(top: 3), child: Text(l.optText, style: ts(13, c: C.skyInk))),
-          if (l.note.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(top: 3), child: Text('Note: ${l.note}', style: ts(13, c: C.amberInk))),
+          InkWell(
+            onTap: () => editLine(l),
+            borderRadius: BorderRadius.circular(8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: Text(l.item.name, style: ts(15, w: w5))),
+                Text(inr(l.total), style: ts(15, w: w5)),
+              ]),
+              if (l.optText.isNotEmpty)
+                Padding(padding: const EdgeInsets.only(top: 3), child: Text(l.optText, style: ts(13, c: C.skyInk))),
+              if (l.note.isNotEmpty)
+                Padding(padding: const EdgeInsets.only(top: 3), child: Text('Note: ${l.note}', style: ts(13, c: C.amberInk))),
+              if (l.note.isEmpty && l.item.kitchenNotes.isNotEmpty)
+                Padding(padding: const EdgeInsets.only(top: 3), child: Text('Tap to add note', style: ts(13, c: C.muted))),
+            ]),
+          ),
           const SizedBox(height: 8),
           Row(children: [
             QtyStepper(
@@ -1002,10 +1072,23 @@ class _OrderTakingState extends State<OrderTakingScreen> {
             const Spacer(),
             Text('${inr(l.unit)} ea', style: ts(12, c: C.muted)),
             const SizedBox(width: 8),
-            RoundIcon(Icons.edit_outlined, size: 36, onTap: () => editLine(l), tooltip: 'Edit'),
-            const SizedBox(width: 6),
             RoundIcon(Icons.delete_outline, size: 36, fg: C.red, onTap: () => setState(() => cart.remove(l)), tooltip: 'Delete'),
           ]),
         ]),
       );
+}
+
+/// A fixed-height bar that stays pinned to the top of the menu while it scrolls.
+class _PinnedBar extends SliverPersistentHeaderDelegate {
+  final double height;
+  final Widget child;
+  _PinnedBar(this.height, this.child);
+  @override
+  double get minExtent => height;
+  @override
+  double get maxExtent => height;
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) => child;
+  @override
+  bool shouldRebuild(_PinnedBar old) => true;
 }

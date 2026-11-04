@@ -197,6 +197,7 @@ class _PrintLayoutScreenState extends State<PrintLayoutScreen> {
             Text('Print layout', style: ts(22, w: w5)),
             if (dirty) ...[const SizedBox(width: 10), const Pill('UNSAVED', bg: C.amberTint, fg: C.amberInk, size: 11)],
           ]),
+          if (!dirty) const OutletConfigStatus(),
           Seg<bool>(
               height: 40,
               fontSize: 15,

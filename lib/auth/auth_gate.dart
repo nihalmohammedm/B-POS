@@ -5,11 +5,12 @@ import '../pos/pos_shell.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'login_screen.dart';
+import 'outlet_picker.dart';
 import 'pin_screen.dart';
 import 'profile_store.dart';
 import 'supabase_auth_api.dart';
 
-enum _Stage { loading, error, login, addAnotherLogin, setPin, pinLock, authenticated }
+enum _Stage { loading, error, login, addAnotherLogin, pickOutlet, setPin, pinLock, authenticated }
 
 /// BPOS's home screen: staff accounts already exist in Supabase (an admin creates
 /// them; the app never does), so this is a plain
@@ -25,8 +26,11 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> {
   final _profileStore = ProfileStore();
   _Stage _stage = _Stage.loading;
-  String? _outletId;
+  _Stage _loginStage = _Stage.login;
   String? _errorMessage;
+  // Signed in, waiting on the outlet pick.
+  AuthSession? _pickSession;
+  List<OutletChoice> _pickOutlets = const [];
   LocalProfile? _activeProfile;
   String? _pendingAuthUserId;
   String? _pendingFullName;
@@ -58,13 +62,9 @@ class _AuthGateState extends State<AuthGate> {
     }
     if (!mounted) return;
     try {
-      final s = StoreScope.of(context);
-      final outletId = await _api().resolveOutletId(s.backofficeOutletCode);
+      await StoreScope.of(context).resolveOutletId();
       if (!mounted) return;
-      setState(() {
-        _outletId = outletId;
-        _stage = _Stage.login;
-      });
+      setState(() => _stage = _Stage.login);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -74,12 +74,8 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
-  Future<String> _ensureOutletId() async {
-    if (_outletId != null) return _outletId!;
-    final s = StoreScope.of(context);
-    _outletId = await _api().resolveOutletId(s.backofficeOutletCode);
-    return _outletId!;
-  }
+  // Always the till's current outlet: it can change from inside the POS (Switch outlet).
+  Future<String> _ensureOutletId() => StoreScope.of(context).resolveOutletId();
 
   Future<void> _afterAuthenticated({
     required AuthSession session,
@@ -118,11 +114,48 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
+  /// Signs in, then settles which outlet: a till that already has one stays on it; a new
+  /// till takes the user's only outlet, or asks when they work at several.
   Future<String?> _submitLogin(String email, String password) async {
     try {
-      final outletId = await _ensureOutletId();
-      final session = await _api().signInWithPassword(email: email, password: password);
-      final profile = await _api().fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId);
+      final s = StoreScope.of(context);
+      final api = _api();
+      final session = await api.signInWithPassword(email: email, password: password);
+      final outlets = await api.fetchUserOutlets(accessToken: session.accessToken, authUserId: session.authUserId);
+      if (outlets.isEmpty) return 'This login is not set up for any outlet. Ask the owner to add you.';
+      OutletChoice? here;
+      for (final o in outlets) {
+        if (o.code == s.backofficeOutletCode) here = o;
+      }
+      if (s.outletBound) {
+        if (here == null) {
+          return 'This till is set up for ${s.outletName.isEmpty ? s.backofficeOutletCode : s.outletName}, '
+              'and you are not linked to it. Ask the owner to add you.';
+        }
+        return await _enterOutlet(session, here);
+      }
+      if (outlets.length == 1) return await _enterOutlet(session, outlets.first);
+      if (!mounted) return null;
+      setState(() {
+        _loginStage = _stage;
+        _pickSession = session;
+        _pickOutlets = outlets;
+        _stage = _Stage.pickOutlet;
+      });
+      return null;
+    } catch (e) {
+      return e is AuthException || e is BackofficeException ? e.toString() : plainError(e);
+    }
+  }
+
+  /// Opens [o] for [session]: reads the user's role there first, so a failure leaves the
+  /// till untouched, then makes it this till's outlet.
+  Future<String?> _enterOutlet(AuthSession session, OutletChoice o) async {
+    try {
+      final s = StoreScope.of(context);
+      final profile = await _api().fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: o.id);
+      final blocked = await s.switchOutlet(o.code);
+      if (blocked != null) return blocked;
       await _afterAuthenticated(session: session, profile: profile);
       return null;
     } catch (e) {
@@ -184,6 +217,21 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
+  /// From the POS: lock back to this user's PIN, or [forget] their saved login and go to
+  /// the next saved profile's PIN (or the password login when none is left).
+  Future<void> _signOut({required bool forget}) async {
+    final s = StoreScope.of(context);
+    final id = s.authUserId;
+    s.clearSession();
+    if (forget && id != null) await _profileStore.remove(id);
+    final next = forget ? await _profileStore.mostRecentlyUsed() : (id == null ? null : await _profileStore.find(id));
+    if (!mounted) return;
+    setState(() {
+      _activeProfile = next;
+      _stage = next != null && _profileStore.hasPin(next) ? _Stage.pinLock : _Stage.login;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = StoreScope.of(context);
@@ -219,6 +267,15 @@ class _AuthGateState extends State<AuthGate> {
           onCancel: () => setState(() => _stage = _Stage.pinLock),
         );
 
+      case _Stage.pickOutlet:
+        return OutletPickerScreen(
+          fullName: '',
+          outlets: _pickOutlets,
+          currentCode: s.outletBound ? s.backofficeOutletCode : '',
+          onPick: (o) => _enterOutlet(_pickSession!, o),
+          onCancel: () => setState(() => _stage = _loginStage),
+        );
+
       case _Stage.setPin:
         return SetPinScreen(fullName: _pendingFullName ?? '', onSet: _submitSetPin);
 
@@ -233,7 +290,7 @@ class _AuthGateState extends State<AuthGate> {
         );
 
       case _Stage.authenticated:
-        return const PosShell();
+        return PosShell(onSignOut: _signOut);
     }
   }
 }

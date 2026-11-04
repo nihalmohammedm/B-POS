@@ -201,7 +201,8 @@ class MenuAdminApi {
     await _patch('products', {'id': 'eq.${m.id}', 'outlet_id': 'eq.$outletId'}, _productRow(m, catId));
     final variants = await _syncVariants(m.id, m.variants, before.variants);
     if (m.kotGroup != before.kotGroup) await _setKotGroup(m.id, m.kotGroup);
-    return _copy(m, m.id, variants, m.subCat);
+    final addons = await _syncAddons(m.id, m.name, m.addons, before.addons);
+    return _copy(m, m.id, variants, m.subCat, addons);
   }
 
   /// Adds a new item to the outlet's active menu version.
@@ -230,7 +231,8 @@ class MenuAdminApi {
     final id = r['id'] as String;
     final variants = await _syncVariants(id, m.variants, const []);
     if (m.kotGroup != null) await _setKotGroup(id, m.kotGroup);
-    return _copy(m, id, variants, m.subCat);
+    final addons = await _syncAddons(id, m.name, m.addons, const []);
+    return _copy(m, id, variants, m.subCat, addons);
   }
 
   /// Adding an item whose code belongs to a removed product brings that product back with the
@@ -248,7 +250,62 @@ class MenuAdminApi {
     ];
     final variants = await _syncVariants(id, want, before);
     await _setKotGroup(id, m.kotGroup);
-    return _copy(m, id, variants, m.subCat);
+    final addons = await _syncAddons(id, m.name, m.addons, const []);
+    return _copy(m, id, variants, m.subCat, addons);
+  }
+
+  /// Marks a modifier group as belonging to one product (`modifier_groups.description`), so the
+  /// editor can tell its add-ons from those of a shared, reusable group.
+  static const addonMarker = 'bpos-item-addons:';
+
+  /// Saves the item's own add-ons (those with [Addon.own]) in a modifier group made for it and
+  /// linked through `product_modifier_groups`. Shared groups are never touched. Returns the
+  /// item's add-ons as saved: the shared ones as they were, plus the own ones with ids.
+  Future<List<Addon>> _syncAddons(String productId, String name, List<Addon> all, List<Addon> before) async {
+    final want = [for (final a in all) if (a.own) a];
+    final shared = [for (final a in all) if (!a.own) a];
+    final marker = '$addonMarker$productId';
+    final found = await _get('modifier_groups', {'select': 'id', 'outlet_id': 'eq.$outletId', 'description': 'eq.$marker', 'limit': '1'});
+    if (found.isEmpty && want.isEmpty) return shared;
+
+    final String groupId;
+    final max = want.isEmpty ? 1 : want.length;
+    if (found.isEmpty) {
+      final prod = await _get('products', {'select': 'menu_version_id', 'id': 'eq.$productId', 'limit': '1'});
+      final g = await _post('modifier_groups', {
+        'outlet_id': outletId,
+        'menu_version_id': prod.first['menu_version_id'],
+        'name': '$name add-ons',
+        'description': marker,
+        'is_required': false,
+        'min_selections': 0,
+        'max_selections': max,
+        'display_order': 0,
+        'is_active': true,
+      });
+      groupId = g['id'] as String;
+    } else {
+      groupId = found.first['id'] as String;
+      await _patch('modifier_groups', {'id': 'eq.$groupId'}, {'name': '$name add-ons', 'max_selections': max, 'is_active': true});
+    }
+    final linked = await _get('product_modifier_groups', {'select': 'product_id', 'product_id': 'eq.$productId', 'modifier_group_id': 'eq.$groupId'});
+    if (linked.isEmpty) await _post('product_modifier_groups', {'product_id': productId, 'modifier_group_id': groupId});
+
+    final keep = {for (final a in want) if (a.id != null) a.id!};
+    for (final a in before) {
+      if (a.own && a.id != null && !keep.contains(a.id)) await _patch('modifiers', {'id': 'eq.${a.id}'}, {'is_active': false});
+    }
+    final saved = <Addon>[];
+    for (final (i, a) in want.indexed) {
+      if (a.id != null) {
+        await _patch('modifiers', {'id': 'eq.${a.id}'}, {'name': a.name, 'price': a.price, 'display_order': i, 'is_active': true});
+        saved.add(a);
+      } else {
+        final r = await _post('modifiers', {'modifier_group_id': groupId, 'name': a.name, 'price': a.price, 'display_order': i, 'is_active': true});
+        saved.add(Addon(a.name, a.price, id: r['id'] as String?, own: true));
+      }
+    }
+    return [...shared, ...saved];
   }
 
   /// Takes an item off the menu. Kept in the database (inactive) so past
@@ -256,7 +313,7 @@ class MenuAdminApi {
   Future<void> deactivateItem(String productId) =>
       _patch('products', {'id': 'eq.$productId', 'outlet_id': 'eq.$outletId'}, {'is_active': false});
 
-  MenuItem _copy(MenuItem m, String id, List<Variant> variants, String subCat) => MenuItem(
+  MenuItem _copy(MenuItem m, String id, List<Variant> variants, String subCat, List<Addon> addons) => MenuItem(
         id: id,
         code: m.code,
         cat: m.cat,
@@ -267,12 +324,13 @@ class MenuAdminApi {
         veg: m.type == 'veg',
         bestseller: m.bestseller,
         variants: variants,
-        addons: m.addons,
+        addons: addons,
         kitchenNotes: m.kitchenNotes,
         kotGroup: m.kotGroup,
         foodType: m.type,
         isMrp: m.isMrp,
         openPrice: m.openPrice,
         dailyPrice: m.dailyPrice,
+        meals: m.meals,
       );
 }

@@ -130,6 +130,23 @@ class _MenuEditorScreenState extends State<MenuEditorScreen> {
   }
 }
 
+class _AddonRow {
+  final String? id;
+  final TextEditingController name, price;
+  _AddonRow(Addon a)
+      : id = a.id,
+        name = TextEditingController(text: a.name),
+        price = TextEditingController(text: a.price == a.price.roundToDouble() ? a.price.toStringAsFixed(0) : '${a.price}');
+  _AddonRow.blank()
+      : id = null,
+        name = TextEditingController(),
+        price = TextEditingController();
+  void dispose() {
+    name.dispose();
+    price.dispose();
+  }
+}
+
 class _SizeRow {
   final String? id;
   final String? kotGroup;
@@ -169,6 +186,8 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           ? ''
           : (existing.price == existing.price.roundToDouble() ? existing.price.toStringAsFixed(0) : '${existing.price}'));
   final sizes = [for (final v in existing?.variants ?? const <Variant>[]) _SizeRow(v)];
+  final addonRows = [for (final a in existing?.addons ?? const <Addon>[]) if (a.own) _AddonRow(a)];
+  final sharedAddons = [for (final a in existing?.addons ?? const <Addon>[]) if (!a.own) a];
   var cat = existing?.cat ?? (s.categories.isNotEmpty ? s.categories.first : '');
   var type = existing?.type ?? 'veg';
   var isMrp = existing?.isMrp ?? false;
@@ -189,6 +208,9 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
         for (final r in sizes) {
           if (r.name.text.trim().isEmpty) return 'Every size needs a name';
           if (!openPrice && (parse(r.price) ?? -1) < 0) return 'Every size needs a price';
+        }
+        for (final r in addonRows) {
+          if (r.name.text.trim().isEmpty || (parse(r.price) ?? -1) < 0) return 'Every add-on needs a name and a price';
         }
         return null;
       }
@@ -211,7 +233,10 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           veg: type == 'veg',
           bestseller: existing?.bestseller ?? false,
           variants: vs,
-          addons: existing?.addons ?? const [],
+          addons: [
+            ...sharedAddons,
+            for (final r in addonRows) Addon(r.name.text.trim(), parse(r.price)!, id: r.id, own: true),
+          ],
           kitchenNotes: existing?.kitchenNotes ?? const [],
           kotGroup: group,
           foodType: type,
@@ -401,6 +426,46 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
                     icon: const Icon(Icons.close),
                     onPressed: ro ? null : () => set(() => sizes.removeAt(i).dispose())),
               ]),
+            ),
+          const SizedBox(height: 14),
+          Row(children: [
+            const Expanded(child: Label('Add-ons')),
+            if (!ro) Btn.outline('Add add-on', icon: Icons.add, height: 34, fontSize: 13, onTap: () => set(() => addonRows.add(_AddonRow.blank()))),
+          ]),
+          if (addonRows.isEmpty && sharedAddons.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('No add-ons. e.g. "Chest piece" +₹20: staff tap it when ordering and the price goes up.', style: ts(12, c: C.muted)),
+            ),
+          for (final (i, r) in addonRows.indexed)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(children: [
+                Expanded(
+                    flex: 3,
+                    child: TextField(controller: r.name, enabled: !ro, style: ts(14), decoration: const InputDecoration(hintText: 'Chest piece'))),
+                const SizedBox(width: 10),
+                Expanded(
+                    flex: 2,
+                    child: TextField(
+                        controller: r.price,
+                        enabled: !ro,
+                        style: ts(14),
+                        keyboardType: money,
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                        decoration: const InputDecoration(prefixText: '+ ₹ ', hintText: '0'))),
+                IconButton(
+                    tooltip: 'Remove add-on',
+                    icon: const Icon(Icons.close),
+                    onPressed: ro ? null : () => set(() => addonRows.removeAt(i).dispose())),
+              ]),
+            ),
+          if (sharedAddons.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                  'From a shared group (change in the backoffice): ${sharedAddons.map((a) => '${a.name} +₹${a.price.toStringAsFixed(0)}').join(', ')}',
+                  style: ts(12, c: C.muted)),
             ),
           const SizedBox(height: 22),
           if (canEdit)

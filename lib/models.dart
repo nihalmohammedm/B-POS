@@ -69,7 +69,12 @@ class Variant {
 class Addon {
   final String name;
   final double price;
-  const Addon(this.name, this.price);
+  /// `modifiers.id`, when it came from the backoffice.
+  final String? id;
+  /// True when it lives in this item's own add-on group, so the menu editor may change it.
+  /// Add-ons from a shared modifier group are shown but left to the backoffice.
+  final bool own;
+  const Addon(this.name, this.price, {this.id, this.own = false});
 
   @override
   bool operator ==(Object other) => other is Addon && name == other.name && price == other.price;

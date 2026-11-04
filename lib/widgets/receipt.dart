@@ -392,6 +392,11 @@ class ReceiptView extends StatelessWidget {
       const _Dash(),
       _kv('TOTAL', inr(t.total, decimals: true), s: 18, w: FontWeight.w700),
       const _Dash(),
+      if (d.type == OrderType.takeaway) ...[
+        const SizedBox(height: 4),
+        _c(takeawayNotice, _m(11, FontWeight.w600)),
+        const SizedBox(height: 4),
+      ],
       if (d.payments.isNotEmpty) ...[
         for (final p in d.payments) _kv('Paid · ${p.method}', _n(p.amount)),
         if (t.tendered > 0) ...[_kv('Cash tendered', _n(t.tendered)), _kv('Change returned', _n(t.change), w: FontWeight.w700)],
@@ -417,6 +422,8 @@ class ReceiptView extends StatelessWidget {
       if (d.type == OrderType.takeaway)
         for (final f in PrintLayout.linesOf(l.billFooterTakeaway)) _c(f, _m(12, FontWeight.w600)),
       if (l.billShowWords) _c('Rupees ${_words(t.total.round())} Only', grey.copyWith(fontSize: _narrow ? 9 : 10)),
+      const SizedBox(height: 6),
+      _c(poweredBy, _m(10)),
     ];
   }
 }
@@ -424,6 +431,12 @@ class ReceiptView extends StatelessWidget {
 /// Bill arithmetic shared by the preview and the ESC/POS renderer. Mirrors
 /// Order's own getters (lib/models.dart) exactly — tax and total are
 /// computed on the subtotal *after* discount, same as what's charged/synced.
+/// Printed on every takeaway bill, just under the total.
+const takeawayNotice = 'Takeaway food to be consumed within 2 hours of packaging';
+
+/// Last line of every bill.
+const poweredBy = 'Powered by BPOS';
+
 class BillTotals {
   final int items;
   final double sub, discount, tax, total, round, tendered, change;
@@ -658,6 +671,7 @@ Future<List<int>> receiptBytes(ReceiptData d, {PrintLayout? layout}) async {
       t.text(dash);
       kv('TOTAL', 'Rs.${n(tot.total)}', tall);
       t.text(dash);
+      if (d.type == OrderType.takeaway) c(takeawayNotice);
       for (final p in d.payments) {
         kv('Paid - ${p.method}', n(p.amount));
       }
@@ -683,6 +697,8 @@ Future<List<int>> receiptBytes(ReceiptData d, {PrintLayout? layout}) async {
         }
       }
       if (l.billShowWords) c('Rupees ${_words(tot.total.round())} Only');
+      t.feed();
+      c(poweredBy);
     }
     t.cut(linesBefore: l.bottomLines(d.isKot));
   }

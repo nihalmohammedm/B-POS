@@ -2,6 +2,7 @@ import 'plain_error.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'models.dart';
+import 'sync/menu_admin_api.dart';
 
 class BackofficeException implements Exception {
   final String message;
@@ -60,14 +61,13 @@ class BackofficeApi {
       phone: outletRow['phone'] as String? ?? '',
     );
 
-    // Only the active menu version is live; rows from archived/draft versions must not show.
+    // Only the active menu version is live: items, categories and modifiers from older
+    // (archived/draft) versions never show. With no readable active version the sync fails
+    // and the POS keeps the menu it already has, rather than loading every version's rows.
     final vers = await _get('menu_versions', {'select': 'id', 'outlet_id': 'eq.$outletId', 'status': 'eq.active', 'limit': '1'});
-    final versionId = vers.isEmpty ? null : vers.first['id'] as String;
-    // Rows with no version (pre-versioning data) stay visible. If no active version is readable
-    // (none exists, or RLS hides menu_versions) we can't scope, so fall back to the outlet's rows.
-    final versionFilter = <String, String>{
-      if (versionId != null) 'or': '(menu_version_id.eq.$versionId,menu_version_id.is.null)',
-    };
+    if (vers.isEmpty) throw BackofficeException('No active menu found for this outlet. Activate the new menu in the backoffice, then sync again.');
+    final versionId = vers.first['id'] as String;
+    final versionFilter = <String, String>{'menu_version_id': 'eq.$versionId'};
 
     final cats = await _get('categories', {
       'select': 'id,name,display_order,parent_id',
@@ -162,7 +162,12 @@ class BackofficeApi {
       for (final r in vmg) r['modifier_group_id'] as String,
     };
     final modsByGroup = <String, List<dynamic>>{};
+    final ownGroups = <String>{};
     if (groupIds.isNotEmpty) {
+      final groups = await _get('modifier_groups', {'select': 'id,description', 'id': 'in.(${groupIds.join(',')})'});
+      for (final g in groups) {
+        if (((g['description'] as String?) ?? '').startsWith(MenuAdminApi.addonMarker)) ownGroups.add(g['id'] as String);
+      }
       final mods = await _get('modifiers', {
         'select': '*',
         'modifier_group_id': 'in.(${groupIds.join(',')})',
@@ -195,7 +200,7 @@ class BackofficeApi {
       final itemAddons = <Addon>[];
       for (final gid in groupsByProduct[pid] ?? const <String>{}) {
         for (final m in modsByGroup[gid] ?? const []) {
-          itemAddons.add(Addon(m['name'] as String, (m['price'] as num).toDouble()));
+          itemAddons.add(Addon(m['name'] as String, (m['price'] as num).toDouble(), id: m['id'] as String?, own: ownGroups.contains(gid)));
         }
       }
       final basePrice = (p['base_price'] as num?)?.toDouble();

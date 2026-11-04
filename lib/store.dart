@@ -570,6 +570,10 @@ class Store extends ChangeNotifier {
   /// claims means yes.
   bool catInPeriod(String cat, MealPeriod? p) => p == null || !mealPeriods.any((x) => x.cats.contains(cat)) || p.cats.contains(cat);
 
+  /// Whether [m] is served in [p]. An item marked with meal periods follows those; otherwise
+  /// it follows its category.
+  bool itemInPeriod(MenuItem m, MealPeriod? p) => p == null || (m.meals.isNotEmpty ? m.meals.contains(p.id) : catInPeriod(m.cat, p));
+
   // ---------- print layout ----------
   PrintLayout printLayout = PrintLayout();
 

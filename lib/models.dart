@@ -139,6 +139,9 @@ class MenuItem {
   /// Price changes day to day (`products.is_daily_price`): listed on Today's prices so a
   /// manager can update it each morning without opening the menu editor.
   final bool dailyPrice;
+  /// Ids of the [MealPeriod]s this item is served in (`products.meal_periods`). Empty = follow its
+  /// category's periods (all day if none).
+  final Set<String> meals;
   const MenuItem({
     required this.id,
     required this.code,
@@ -157,6 +160,7 @@ class MenuItem {
     this.isMrp = false,
     this.openPrice = false,
     this.dailyPrice = false,
+    this.meals = const {},
   });
 
   String get type => foodType.isNotEmpty ? foodType : (veg ? 'veg' : 'non-veg');
@@ -199,7 +203,8 @@ class MenuItem {
       foodType == other.foodType &&
       isMrp == other.isMrp &&
       openPrice == other.openPrice &&
-      dailyPrice == other.dailyPrice;
+      dailyPrice == other.dailyPrice &&
+      setEquals(meals, other.meals);
 
   @override
   int get hashCode => Object.hash(id, code, cat, subCat, name, desc, price, veg, bestseller);
@@ -222,6 +227,7 @@ class MenuItem {
         'isMrp': isMrp,
         'openPrice': openPrice,
         'dailyPrice': dailyPrice,
+        'meals': meals.toList(),
       };
 
   factory MenuItem.fromJson(Map<String, dynamic> j) => MenuItem(
@@ -242,6 +248,7 @@ class MenuItem {
         isMrp: j['isMrp'] as bool? ?? false,
         openPrice: j['openPrice'] as bool? ?? false,
         dailyPrice: j['dailyPrice'] as bool? ?? false,
+        meals: {...(j['meals'] as List? ?? []).cast<String>()},
       );
 }
 

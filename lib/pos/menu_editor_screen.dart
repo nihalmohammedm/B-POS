@@ -174,6 +174,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
   var isMrp = existing?.isMrp ?? false;
   var openPrice = existing?.openPrice ?? false;
   var dailyPrice = existing?.dailyPrice ?? false;
+  final meals = <String>{...?existing?.meals};
   var subCat = existing?.subCat ?? '';
   String? group = existing?.kotGroup;
   var busy = false;
@@ -217,6 +218,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           isMrp: isMrp,
           openPrice: openPrice,
           dailyPrice: dailyPrice,
+          meals: meals,
         );
         set(() => busy = true);
         try {
@@ -340,6 +342,21 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
             value: dailyPrice,
             onChanged: ro ? null : (v) => set(() => dailyPrice = v),
           ),
+          if (s.mealPeriods.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Label('Served at'),
+            const SizedBox(height: 6),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final p in s.mealPeriods)
+                FilterChip(
+                    label: Text(p.name),
+                    selected: meals.contains(p.id),
+                    onSelected: ro ? null : (v) => set(() => v ? meals.add(p.id) : meals.remove(p.id))),
+            ]),
+            const SizedBox(height: 4),
+            Text(meals.isEmpty ? 'None picked · follows its category' : 'Only shown during the picked times',
+                style: ts(12, c: C.muted)),
+          ],
           const SizedBox(height: 8),
           const Label('KOT group'),
           const SizedBox(height: 6),

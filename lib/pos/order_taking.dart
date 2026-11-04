@@ -361,12 +361,12 @@ class _OrderTakingState extends State<OrderTakingScreen> {
 
   List<String> _cats(Store s) {
     final p = _period(s);
-    return [for (final c in s.categories) if (s.catInPeriod(c, p)) c];
+    return [for (final c in s.categories) if (s.itemsIn(c).any((m) => s.itemInPeriod(m, p))) c];
   }
 
   int _count(Store s, String? c) {
     final p = _period(s);
-    return (c == null ? s.menu : s.itemsIn(c)).where((m) => s.catInPeriod(m.cat, p)).length;
+    return (c == null ? s.menu : s.itemsIn(c)).where((m) => s.itemInPeriod(m, p)).length;
   }
 
   Widget _periodBar(Store s) {
@@ -413,7 +413,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
     final p = _period(s);
     return s.menu
         .where((m) =>
-            s.catInPeriod(m.cat, p) &&
+            s.itemInPeriod(m, p) &&
             (cat == null || m.cat == cat) &&
             (subCat == null || m.subCat == subCat) &&
             (!vegOnly || m.veg) &&

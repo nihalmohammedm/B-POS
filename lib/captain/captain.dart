@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models.dart';
@@ -556,6 +557,9 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
   static const popular = ['g1', 'm1', 'p1', 'v2', 'b1', 's2', 'v1', 'd1'];
   String cat = 'Popular';
   String? subCat;
+  /// Meal-period filter: null = follow the clock, '' = all day, otherwise a period id.
+  String? periodSel;
+  Timer? _clock;
   final cart = <OrderLine>[];
   bool sentOpen = false;
   bool sending = false;
@@ -595,10 +599,15 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
   void initState() {
     super.initState();
     focus.addListener(() => setState(() {}));
+    // Re-evaluate the running meal period as the clock moves.
+    _clock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _clock?.cancel();
     focus.dispose();
     qC.dispose();
     nameC.dispose();
@@ -607,15 +616,70 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
     super.dispose();
   }
 
+  MealPeriod? _period(Store s) {
+    if (s.mealPeriods.isEmpty || periodSel == '') return null;
+    if (periodSel == null) return s.currentPeriod();
+    for (final p in s.mealPeriods) {
+      if (p.id == periodSel) return p;
+    }
+    return s.currentPeriod();
+  }
+
+  List<String> _cats(Store s) {
+    final p = _period(s);
+    return [for (final c in s.categories) if (s.itemsIn(c).any((m) => s.itemInPeriod(m, p))) c];
+  }
+
+  Widget _periodBar(Store s) {
+    final now = s.currentPeriod();
+    final sel = _period(s);
+    Widget chip(String label, String? sub, bool on, VoidCallback tap) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Material(
+            color: on ? C.ink : Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: tap,
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(999), border: Border.all(color: on ? C.ink : C.line)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(label, style: ts(14, w: w5, c: on ? Colors.white : C.ink)),
+                  if (sub != null) ...[const SizedBox(width: 8), Text(sub, style: ts(12, c: on ? const Color(0xDDFFFFFF) : C.muted))],
+                ]),
+              ),
+            ),
+          ),
+        );
+    void pick(String? id) => setState(() {
+          periodSel = id;
+          cat = 'Popular';
+          subCat = null;
+        });
+    return SizedBox(
+      height: 40,
+      child: ListView(scrollDirection: Axis.horizontal, children: [
+        for (final p in s.mealPeriods) chip(p.name, p.range, sel?.id == p.id, () => pick(p.id == now?.id ? null : p.id)),
+        chip('All day', null, sel == null, () => pick('')),
+      ]),
+    );
+  }
+
   List<MenuItem> search(Store s) {
     final x = q;
+    final per = _period(s);
+    bool served(MenuItem m) => s.itemInPeriod(m, per);
     if (x.isEmpty) {
       if (cat != 'Popular') {
-        final all = s.itemsIn(cat);
+        final all = s.itemsIn(cat).where(served).toList();
         return subCat == null ? all : all.where((m) => m.subCat == subCat).toList();
       }
-      final pop = [for (final id in popular) ...s.menu.where((m) => m.id == id)];
-      return pop.isNotEmpty ? pop : s.menu.take(24).toList();
+      final menu = s.menu.where(served).toList();
+      final pop = [for (final id in popular) ...menu.where((m) => m.id == id)];
+      return pop.isNotEmpty ? pop : menu.take(24).toList();
     }
     int score(MenuItem m) {
       final n = m.name.toLowerCase();
@@ -631,7 +695,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
       return i == x.length ? 5 : 9;
     }
 
-    final scored = s.menu.map((m) => (m, score(m))).where((e) => e.$2 < 9).toList()
+    final scored = s.menu.where(served).map((m) => (m, score(m))).where((e) => e.$2 < 9).toList()
       ..sort((a, b) => a.$2 != b.$2 ? a.$2 - b.$2 : a.$1.code.compareTo(b.$1.code));
     return scored.map((e) => e.$1).toList();
   }
@@ -860,12 +924,16 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                       suffixIcon: hasQ ? IconButton(icon: const Icon(Icons.close), onPressed: () => setState(qC.clear)) : null,
                     ),
                   ),
+                  if (s.mealPeriods.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    _periodBar(s),
+                  ],
                   if (!hasQ) ...[
                     const SizedBox(height: 10),
                     SizedBox(
                       height: 40,
                       child: ListView(scrollDirection: Axis.horizontal, children: [
-                        for (final c in ['Popular', ...s.categories])
+                        for (final c in ['Popular', ..._cats(s)])
                           Padding(
                             padding: const EdgeInsets.only(right: 8),
                             child: Material(

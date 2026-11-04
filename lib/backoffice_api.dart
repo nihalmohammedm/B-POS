@@ -225,6 +225,7 @@ class BackofficeApi {
         isMrp: p['is_mrp'] as bool? ?? false,
         openPrice: p['is_open_price'] as bool? ?? false,
         dailyPrice: p['is_daily_price'] as bool? ?? false,
+        meals: {...(p['meal_periods'] as List? ?? []).cast<String>()},
       ));
     }
 

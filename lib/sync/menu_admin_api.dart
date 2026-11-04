@@ -49,7 +49,7 @@ class MenuAdminApi {
         .patch(_u(path, qp), headers: _headers(write: true, prefer: 'return=representation'), body: jsonEncode(body))
         .timeout(const Duration(seconds: 15));
     if (r.statusCode >= 300 && _dropMissing(r, body)) {
-      // A column's migration (supabase_mrp_items.sql, supabase_variable_pricing.sql) hasn't been run yet: save everything else.
+      // A column's migration (supabase_mrp_items.sql, supabase_variable_pricing.sql, supabase_meal_periods.sql) hasn't been run yet: save everything else.
       r = await http
           .patch(_u(path, qp), headers: _headers(write: true, prefer: 'return=representation'), body: jsonEncode(body))
           .timeout(const Duration(seconds: 15));
@@ -62,7 +62,7 @@ class MenuAdminApi {
 
   /// Columns added by optional migrations. If the backoffice rejects one as unknown,
   /// it's removed from [body] and true is returned so the write can be retried without it.
-  static const _optionalColumns = ['is_mrp', 'is_open_price', 'is_daily_price'];
+  static const _optionalColumns = ['is_mrp', 'is_open_price', 'is_daily_price', 'meal_periods'];
   bool _dropMissing(http.Response r, Map<String, dynamic> body) {
     final missing = [for (final c in _optionalColumns) if (body.containsKey(c) && r.body.contains(c)) c];
     missing.forEach(body.remove);
@@ -114,6 +114,7 @@ class MenuAdminApi {
         'is_mrp': m.isMrp,
         'is_open_price': m.openPrice,
         'is_daily_price': m.dailyPrice,
+        'meal_periods': m.meals.toList(),
       };
 
   Future<void> _setKotGroup(String productId, String? groupId) async {

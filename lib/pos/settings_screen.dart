@@ -9,6 +9,7 @@ import '../updater.dart';
 import '../widgets/common.dart';
 import 'captains_screen.dart';
 import 'kot_groups_screen.dart';
+import 'addon_groups_panel.dart';
 import 'meal_periods_panel.dart';
 import 'menu_editor_screen.dart';
 import 'todays_prices_screen.dart';
@@ -21,6 +22,7 @@ enum _Sec {
   connection('Connection', Icons.link),
   menu('Menu & sync', Icons.sync),
   menuEdit('Menu items', Icons.restaurant_menu),
+  addonGroups('Add-on groups', Icons.add_circle_outline),
   mealTimes('Meal times', Icons.schedule),
   bills('Settled bills', Icons.receipt_long_outlined),
   printers('Printers', Icons.print_outlined),
@@ -230,6 +232,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _Sec.connection => [_connectionPanel(s)],
       _Sec.menu => [_syncPanel(s), _overviewPanel(s)],
       _Sec.menuEdit => [_menuEditPanel(s), _todaysPricesPanel(s)],
+      _Sec.addonGroups => [const AddonGroupsPanel()],
       _Sec.mealTimes => [const MealPeriodsPanel()],
       _Sec.bills => [_billSyncPanel(s)],
       _Sec.printers => [_printersPanel(s)],

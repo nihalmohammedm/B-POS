@@ -187,7 +187,9 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           : (existing.price == existing.price.roundToDouble() ? existing.price.toStringAsFixed(0) : '${existing.price}'));
   final sizes = [for (final v in existing?.variants ?? const <Variant>[]) _SizeRow(v)];
   final addonRows = [for (final a in existing?.addons ?? const <Addon>[]) if (a.own) _AddonRow(a)];
-  final sharedAddons = [for (final a in existing?.addons ?? const <Addon>[]) if (!a.own) a];
+  // Add-ons from a group this editor doesn't manage (e.g. a size-level group); kept as they are.
+  final sharedAddons = [for (final a in existing?.addons ?? const <Addon>[]) if (!a.own && !(existing?.addonGroupIds.contains(a.groupId) ?? false)) a];
+  final groupIds = <String>{...?existing?.addonGroupIds};
   var cat = existing?.cat ?? (s.categories.isNotEmpty ? s.categories.first : '');
   var type = existing?.type ?? 'veg';
   var isMrp = existing?.isMrp ?? false;
@@ -234,9 +236,12 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           bestseller: existing?.bestseller ?? false,
           variants: vs,
           addons: [
-            ...sharedAddons,
             for (final r in addonRows) Addon(r.name.text.trim(), parse(r.price)!, id: r.id, own: true),
+            ...sharedAddons,
+            for (final g in s.addonGroups)
+              if (groupIds.contains(g.id)) ...g.addons,
           ],
+          addonGroupIds: {for (final g in s.addonGroups) if (groupIds.contains(g.id)) g.id},
           kitchenNotes: existing?.kitchenNotes ?? const [],
           kotGroup: group,
           foodType: type,
@@ -432,7 +437,21 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
             const Expanded(child: Label('Add-ons')),
             if (!ro) Btn.outline('Add add-on', icon: Icons.add, height: 34, fontSize: 13, onTap: () => set(() => addonRows.add(_AddonRow.blank()))),
           ]),
-          if (addonRows.isEmpty && sharedAddons.isEmpty)
+          if (s.addonGroups.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final g in s.addonGroups)
+                FilterChip(
+                    label: Text('${g.name} · ${g.addons.length}'),
+                    selected: groupIds.contains(g.id),
+                    onSelected: ro ? null : (v) => set(() => v ? groupIds.add(g.id) : groupIds.remove(g.id))),
+            ]),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('Shared groups: tick to use here. Edit them in Settings › Add-on groups.', style: ts(12, c: C.muted)),
+            ),
+          ],
+          if (addonRows.isEmpty && sharedAddons.isEmpty && groupIds.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text('No add-ons. e.g. "Chest piece" +₹20: staff tap it when ordering and the price goes up.', style: ts(12, c: C.muted)),
@@ -464,7 +483,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                  'From a shared group (change in the backoffice): ${sharedAddons.map((a) => '${a.name} +₹${a.price.toStringAsFixed(0)}').join(', ')}',
+                  'From a group set up in the backoffice: ${sharedAddons.map((a) => '${a.name} +₹${a.price.toStringAsFixed(0)}').join(', ')}',
                   style: ts(12, c: C.muted)),
             ),
           const SizedBox(height: 22),

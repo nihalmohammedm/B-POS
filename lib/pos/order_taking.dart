@@ -44,13 +44,14 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   late final nameF = _clearOnFocus(nameC, _defName),
       phoneF = _clearOnFocus(phoneC, _defPhone),
       addrF = _clearOnFocus(addrC, _defAddr);
-  // Takeaway parcel charge: ₹5 per non-MRP item by default, and the total is what staff can edit.
+  // Takeaway parcel charge: ₹5 per item (not per unit) by default, none for MRP or Extra items,
+  // and the total is what staff can edit.
   static const _parcelPerItem = 5.0;
   final parcelC = TextEditingController();
   bool _parcelEdited = false;
   double get _parcelAuto {
     final prior = existing?.liveLines ?? const <OrderLine>[];
-    return _parcelPerItem * [...prior, ...cart].where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.qty);
+    return _parcelPerItem * {for (final l in [...prior, ...cart]) if (l.qty > 0 && !l.item.noParcel) l.item.id}.length;
   }
 
   double get _parcelAmount => type != OrderType.takeaway
@@ -240,6 +241,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       // What the invoice will total: anything already on the order plus this cart.
       final whole = Order(id: 0, type: type)
         ..parcelRate = type == OrderType.takeaway ? _parcelPerItem : 0
+        ..parcelPerItem = true
         ..parcelOverride = _parcelOverride
         ..lines.addAll([for (final l in [...o.liveLines, ...cart]) l.copy()]);
       pays = await showPaymentDialog(context,
@@ -255,6 +257,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         ..phone = phoneC.text.trim() == _defPhone ? '' : phoneC.text.trim()
         ..address = addrC.text.trim()
         ..parcelRate = type == OrderType.takeaway ? _parcelPerItem : 0
+        ..parcelPerItem = true
         ..parcelOverride = _parcelOverride;
     }
     final ks = s.sendKot(o, cart);
@@ -918,6 +921,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                 final prior = existing?.liveLines ?? const <OrderLine>[];
                 final whole = Order(id: 0, type: type)
                   ..parcelRate = _parcelPerItem
+                  ..parcelPerItem = true
                   ..parcelOverride = _parcelOverride
                   ..lines.addAll([for (final l in [...prior, ...cart]) l.copy()]);
                 return Btn(

@@ -141,6 +141,14 @@ class Store extends ChangeNotifier {
     outletConfigDirty = await _getSetting('outletConfigDirty') == '1';
     await _loadKotConfig();
     await _loadCaptains();
+    final groupsStr = await _getSetting('addonGroups');
+    if (groupsStr != null) {
+      try {
+        addonGroups = (jsonDecode(groupsStr) as List).map((e) => AddonGroup.fromJson(e as Map<String, dynamic>)).toList();
+      } catch (_) {
+        // Corrupt value: no shared groups until the next menu sync.
+      }
+    }
     final periodsStr = await _getSetting('mealPeriods');
     if (periodsStr != null) {
       try {
@@ -481,6 +489,51 @@ class Store extends ChangeNotifier {
     _notices.close();
     _revoked.close();
     super.dispose();
+  }
+
+  // ---------- reusable add-on groups ----------
+  /// Shared add-on groups (e.g. "Alfaham extras") of the active menu; items pick them in the editor.
+  List<AddonGroup> addonGroups = [];
+
+  /// Items using the group.
+  int itemsUsingGroup(String id) => menu.where((m) => m.addonGroupIds.contains(id)).length;
+
+  /// The add-ons an item should carry: its own, any from shared groups it doesn't manage here
+  /// (variant-level ones from the backoffice), then those of the [groupIds] it uses.
+  List<Addon> addonsFor(MenuItem m, Set<String> groupIds, {List<Addon>? own}) => [
+        for (final a in own ?? m.addons)
+          if (a.own) a,
+        for (final a in m.addons)
+          if (!a.own && !m.addonGroupIds.contains(a.groupId) && !groupIds.contains(a.groupId)) a,
+        for (final g in addonGroups)
+          if (groupIds.contains(g.id)) ...g.addons,
+      ];
+
+  Future<void> _afterGroupChange() async {
+    for (final (i, m) in menu.indexed.toList()) {
+      if (m.addonGroupIds.isEmpty) continue;
+      final ids = {for (final id in m.addonGroupIds) if (addonGroups.any((g) => g.id == id)) id};
+      menu[i] = m.withAddons(addonsFor(m, ids), ids);
+    }
+    await _setSetting('addonGroups', jsonEncode(addonGroups.map((g) => g.toJson()).toList()));
+    await _saveMenu();
+    notifyListeners();
+  }
+
+  /// Creates ([g].id empty) or updates a reusable add-on group in the backoffice, then refreshes
+  /// the add-ons of every item that uses it.
+  Future<AddonGroup> saveAddonGroup(AddonGroup g) async {
+    final i = addonGroups.indexWhere((x) => x.id == g.id);
+    final saved = await (await _menuAdmin()).saveAddonGroup(g, i < 0 ? const [] : addonGroups[i].addons);
+    i < 0 ? addonGroups = [...addonGroups, saved] : addonGroups[i] = saved;
+    await _afterGroupChange();
+    return saved;
+  }
+
+  Future<void> removeAddonGroup(String id) async {
+    await (await _menuAdmin()).deactivateAddonGroup(id);
+    addonGroups = [for (final g in addonGroups) if (g.id != id) g];
+    await _afterGroupChange();
   }
 
   // ---------- meal periods ----------
@@ -1375,6 +1428,8 @@ class Store extends ChangeNotifier {
       categories = result.categories;
       kotGroups = result.kotGroups;
       subCatTree = result.subCats;
+      addonGroups = result.addonGroups;
+      await _setSetting('addonGroups', jsonEncode(addonGroups.map((g) => g.toJson()).toList()));
       if (result.outlet.name.isNotEmpty) outletName = result.outlet.name;
       outletAddress = result.outlet.address;
       outletPhone = result.outlet.phone;

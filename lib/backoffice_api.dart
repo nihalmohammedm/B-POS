@@ -24,7 +24,9 @@ class BackofficeMenu {
   final List<KotGroup> kotGroups;
   /// Top-level category name -> its sub-category names (including ones with no items yet).
   final Map<String, List<String>> subCats;
-  BackofficeMenu(this.categories, this.items, this.outlet, this.tables, this.kotGroups, [this.subCats = const {}]);
+  /// Reusable add-on groups of the active menu (not the per-item ones).
+  final List<AddonGroup> addonGroups;
+  BackofficeMenu(this.categories, this.items, this.outlet, this.tables, this.kotGroups, [this.subCats = const {}, this.addonGroups = const []]);
 }
 
 /// Talks to the `bpos` schema of a self-hosted Supabase/PostgREST backend.
@@ -163,14 +165,32 @@ class BackofficeApi {
     };
     final modsByGroup = <String, List<dynamic>>{};
     final ownGroups = <String>{};
-    if (groupIds.isNotEmpty) {
-      final groups = await _get('modifier_groups', {'select': 'id,description', 'id': 'in.(${groupIds.join(',')})'});
-      for (final g in groups) {
-        if (((g['description'] as String?) ?? '').startsWith(MenuAdminApi.addonMarker)) ownGroups.add(g['id'] as String);
-      }
+    // The outlet's modifier groups in the active menu: tells an item's own add-ons from the reusable
+    // groups. If this table isn't readable the menu still loads, with every add-on shown as shared.
+    var modGroupRows = <dynamic>[];
+    try {
+      modGroupRows = await _get('modifier_groups', {
+        'select': 'id,name,description',
+        'outlet_id': 'eq.$outletId',
+        ...versionFilter,
+        'is_active': 'eq.true',
+        'order': 'display_order.asc',
+      });
+    } on BackofficeException {
+      // keep going without group info
+    }
+    for (final g in modGroupRows) {
+      if (((g['description'] as String?) ?? '').startsWith(MenuAdminApi.addonMarker)) ownGroups.add(g['id'] as String);
+    }
+    // A switched-off group stops contributing add-ons (only when the table is readable to tell).
+    final liveGroups = {for (final g in modGroupRows) g['id'] as String};
+    final sharedGroupRows = [for (final g in modGroupRows) if (!ownGroups.contains(g['id'])) g];
+    final sharedIds = {for (final g in sharedGroupRows) g['id'] as String};
+    final modGroupIds = {...groupIds, ...sharedIds};
+    if (modGroupIds.isNotEmpty) {
       final mods = await _get('modifiers', {
         'select': '*',
-        'modifier_group_id': 'in.(${groupIds.join(',')})',
+        'modifier_group_id': 'in.(${modGroupIds.join(',')})',
         'is_active': 'eq.true',
         'order': 'display_order.asc',
       });
@@ -179,14 +199,15 @@ class BackofficeApi {
       }
     }
 
+    bool live(String gid) => liveGroups.isEmpty || liveGroups.contains(gid);
     final variantToProduct = {for (final v in variants) v['id'] as String: v['product_id'] as String};
     final groupsByProduct = <String, Set<String>>{};
     for (final r in pmg) {
-      groupsByProduct.putIfAbsent(r['product_id'] as String, () => {}).add(r['modifier_group_id'] as String);
+      if (live(r['modifier_group_id'] as String)) groupsByProduct.putIfAbsent(r['product_id'] as String, () => {}).add(r['modifier_group_id'] as String);
     }
     for (final r in vmg) {
       final pid = variantToProduct[r['variant_id']];
-      if (pid != null) groupsByProduct.putIfAbsent(pid, () => {}).add(r['modifier_group_id'] as String);
+      if (pid != null && live(r['modifier_group_id'] as String)) groupsByProduct.putIfAbsent(pid, () => {}).add(r['modifier_group_id'] as String);
     }
 
     final items = <MenuItem>[];
@@ -200,7 +221,7 @@ class BackofficeApi {
       final itemAddons = <Addon>[];
       for (final gid in groupsByProduct[pid] ?? const <String>{}) {
         for (final m in modsByGroup[gid] ?? const []) {
-          itemAddons.add(Addon(m['name'] as String, (m['price'] as num).toDouble(), id: m['id'] as String?, own: ownGroups.contains(gid)));
+          itemAddons.add(Addon(m['name'] as String, (m['price'] as num).toDouble(), id: m['id'] as String?, own: ownGroups.contains(gid), groupId: gid));
         }
       }
       final basePrice = (p['base_price'] as num?)?.toDouble();
@@ -231,11 +252,19 @@ class BackofficeApi {
         openPrice: p['is_open_price'] as bool? ?? false,
         dailyPrice: p['is_daily_price'] as bool? ?? false,
         meals: {...(p['meal_periods'] as List? ?? []).cast<String>()},
+        addonGroupIds: {for (final g in groupsByProduct[pid] ?? const <String>{}) if (sharedIds.contains(g)) g},
       ));
     }
 
     // An uploaded menu can leave categories no product points at; showing them gives dead tiles.
     final used = {for (final i in items) i.cat};
-    return BackofficeMenu([for (final c in categoryNames) if (used.contains(c)) c], items, outlet, tables, kotGroups, subCatsByParent);
+    final addonGroups = [
+      for (final g in sharedGroupRows)
+        AddonGroup(g['id'] as String, g['name'] as String, [
+          for (final m in modsByGroup[g['id']] ?? const [])
+            Addon(m['name'] as String, (m['price'] as num).toDouble(), id: m['id'] as String?, groupId: g['id'] as String),
+        ]),
+    ];
+    return BackofficeMenu([for (final c in categoryNames) if (used.contains(c)) c], items, outlet, tables, kotGroups, subCatsByParent, addonGroups);
   }
 }

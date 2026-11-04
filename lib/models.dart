@@ -74,15 +74,30 @@ class Addon {
   /// True when it lives in this item's own add-on group, so the menu editor may change it.
   /// Add-ons from a shared modifier group are shown but left to the backoffice.
   final bool own;
-  const Addon(this.name, this.price, {this.id, this.own = false});
+  /// The modifier group it belongs to (`modifiers.modifier_group_id`).
+  final String? groupId;
+  const Addon(this.name, this.price, {this.id, this.own = false, this.groupId});
 
   @override
   bool operator ==(Object other) => other is Addon && name == other.name && price == other.price;
   @override
   int get hashCode => Object.hash(name, price);
 
-  Map<String, dynamic> toJson() => {'name': name, 'price': price};
-  factory Addon.fromJson(Map<String, dynamic> j) => Addon(j['name'] as String, (j['price'] as num).toDouble());
+  Map<String, dynamic> toJson() => {'name': name, 'price': price, 'id': id, 'own': own, 'groupId': groupId};
+  factory Addon.fromJson(Map<String, dynamic> j) => Addon(j['name'] as String, (j['price'] as num).toDouble(),
+      id: j['id'] as String?, own: j['own'] as bool? ?? false, groupId: j['groupId'] as String?);
+}
+
+/// A reusable set of add-ons (a shared modifier group, e.g. "Alfaham extras") that any number of
+/// items can use. Changing it changes every item that uses it.
+class AddonGroup {
+  final String id, name;
+  final List<Addon> addons;
+  const AddonGroup(this.id, this.name, this.addons);
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'addons': addons.map((a) => a.toJson()).toList()};
+  factory AddonGroup.fromJson(Map<String, dynamic> j) => AddonGroup(j['id'] as String, j['name'] as String,
+      (j['addons'] as List? ?? []).map((e) => Addon.fromJson(e as Map<String, dynamic>)).toList());
 }
 
 /// A named time-of-day window (Morning, Lunch, Evening, Dinner…) and the categories
@@ -147,6 +162,8 @@ class MenuItem {
   /// Ids of the [MealPeriod]s this item is served in (`products.meal_periods`). Empty = follow its
   /// category's periods (all day if none).
   final Set<String> meals;
+  /// Ids of the shared [AddonGroup]s this item uses. Their add-ons are part of [addons] too.
+  final Set<String> addonGroupIds;
   const MenuItem({
     required this.id,
     required this.code,
@@ -166,7 +183,34 @@ class MenuItem {
     this.openPrice = false,
     this.dailyPrice = false,
     this.meals = const {},
+    this.addonGroupIds = const {},
   });
+
+  /// This item with a different add-on list and shared-group set (everything else unchanged).
+  MenuItem withAddons(List<Addon> addons, Set<String> groupIds) => MenuItem(
+        id: id,
+        code: code,
+        cat: cat,
+        name: name,
+        price: price,
+        subCat: subCat,
+        veg: veg,
+        desc: desc,
+        bestseller: bestseller,
+        variants: variants,
+        addons: addons,
+        kitchenNotes: kitchenNotes,
+        kotGroup: kotGroup,
+        foodType: foodType,
+        isMrp: isMrp,
+        openPrice: openPrice,
+        dailyPrice: dailyPrice,
+        meals: meals,
+        addonGroupIds: groupIds,
+      );
+
+  /// No takeaway parcel charge: packaged MRP items and anything in the Extra(s) category.
+  bool get noParcel => isMrp || const {'extra', 'extras'}.contains(cat.trim().toLowerCase());
 
   String get type => foodType.isNotEmpty ? foodType : (veg ? 'veg' : 'non-veg');
 
@@ -209,7 +253,8 @@ class MenuItem {
       isMrp == other.isMrp &&
       openPrice == other.openPrice &&
       dailyPrice == other.dailyPrice &&
-      setEquals(meals, other.meals);
+      setEquals(meals, other.meals) &&
+      setEquals(addonGroupIds, other.addonGroupIds);
 
   @override
   int get hashCode => Object.hash(id, code, cat, subCat, name, desc, price, veg, bestseller);
@@ -233,6 +278,7 @@ class MenuItem {
         'openPrice': openPrice,
         'dailyPrice': dailyPrice,
         'meals': meals.toList(),
+        'addonGroupIds': addonGroupIds.toList(),
       };
 
   factory MenuItem.fromJson(Map<String, dynamic> j) => MenuItem(
@@ -254,6 +300,7 @@ class MenuItem {
         openPrice: j['openPrice'] as bool? ?? false,
         dailyPrice: j['dailyPrice'] as bool? ?? false,
         meals: {...(j['meals'] as List? ?? []).cast<String>()},
+        addonGroupIds: {...(j['addonGroupIds'] as List? ?? []).cast<String>()},
       );
 }
 
@@ -603,6 +650,9 @@ class Order {
   double parcelRate = 0;
   /// Parcel charge typed in by staff for the whole order; replaces rate × items when set.
   double? parcelOverride;
+  /// Charged once per distinct item (Porotta x3 = one parcel), not per unit. Frozen on the order:
+  /// orders saved before this keep charging per unit, so their bills never change.
+  bool parcelPerItem = false;
 
   Order({
     required this.id,
@@ -624,10 +674,12 @@ class Order {
   /// this, not the raw subtotal, so a discount also reduces tax collected.
   double get discountedSubtotal => (subtotal - discountAmount).clamp(0, subtotal);
   double get tax => discountedSubtotal * 0.05;
-  /// Parcel charge: [parcelRate] × units of non-MRP items still live on a takeaway order.
-  double get parcelCharge => type == OrderType.takeaway
-      ? parcelOverride ?? parcelRate * lines.where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.activeQty)
-      : 0;
+  /// Parcel charge: [parcelRate] × the items still live on a takeaway order, skipping MRP and Extra
+  /// items. One per item, or (older orders) one per unit.
+  double get parcelCharge => type == OrderType.takeaway ? parcelOverride ?? parcelRate * _parcelCount : 0;
+  int get _parcelCount => parcelPerItem
+      ? {for (final l in lines) if (l.activeQty > 0 && !l.item.noParcel) l.item.id}.length
+      : lines.where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.activeQty);
   double get fee => type == OrderType.delivery ? 40 : parcelCharge;
   String get feeLabel => type == OrderType.delivery ? 'Delivery charge' : 'Parcel charge';
   double get raw => discountedSubtotal + tax + fee;
@@ -674,6 +726,7 @@ class Order {
         'discountReason': discountReason,
         'parcelRate': parcelRate,
         'parcelOverride': parcelOverride,
+        'parcelPerItem': parcelPerItem,
       };
 
   factory Order.fromJson(Map<String, dynamic> j) {
@@ -705,7 +758,8 @@ class Order {
       ..discountAmount = (j['discountAmount'] as num?)?.toDouble() ?? 0
       ..discountReason = j['discountReason'] as String?
       ..parcelRate = (j['parcelRate'] as num?)?.toDouble() ?? 0
-      ..parcelOverride = (j['parcelOverride'] as num?)?.toDouble();
+      ..parcelOverride = (j['parcelOverride'] as num?)?.toDouble()
+      ..parcelPerItem = j['parcelPerItem'] as bool? ?? false;
     o.lines.addAll((j['lines'] as List? ?? []).map((e) => OrderLine.fromJson(e as Map<String, dynamic>)));
     o.payments.addAll((j['payments'] as List? ?? []).map((e) => Payment.fromJson(e as Map<String, dynamic>)));
     o.cancellations

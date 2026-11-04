@@ -201,6 +201,7 @@ class MenuAdminApi {
     await _patch('products', {'id': 'eq.${m.id}', 'outlet_id': 'eq.$outletId'}, _productRow(m, catId));
     final variants = await _syncVariants(m.id, m.variants, before.variants);
     if (m.kotGroup != before.kotGroup) await _setKotGroup(m.id, m.kotGroup);
+    await _syncGroupLinks(m.id, m.addonGroupIds, before.addonGroupIds);
     final addons = await _syncAddons(m.id, m.name, m.addons, before.addons);
     return _copy(m, m.id, variants, m.subCat, addons);
   }
@@ -231,6 +232,7 @@ class MenuAdminApi {
     final id = r['id'] as String;
     final variants = await _syncVariants(id, m.variants, const []);
     if (m.kotGroup != null) await _setKotGroup(id, m.kotGroup);
+    await _syncGroupLinks(id, m.addonGroupIds, const {});
     final addons = await _syncAddons(id, m.name, m.addons, const []);
     return _copy(m, id, variants, m.subCat, addons);
   }
@@ -250,6 +252,8 @@ class MenuAdminApi {
     ];
     final variants = await _syncVariants(id, want, before);
     await _setKotGroup(id, m.kotGroup);
+    final oldLinks = await _get('product_modifier_groups', {'select': 'modifier_group_id', 'product_id': 'eq.$id'});
+    await _syncGroupLinks(id, m.addonGroupIds, {for (final r in oldLinks) r['modifier_group_id'] as String});
     final addons = await _syncAddons(id, m.name, m.addons, const []);
     return _copy(m, id, variants, m.subCat, addons);
   }
@@ -264,6 +268,9 @@ class MenuAdminApi {
   Future<List<Addon>> _syncAddons(String productId, String name, List<Addon> all, List<Addon> before) async {
     final want = [for (final a in all) if (a.own) a];
     final shared = [for (final a in all) if (!a.own) a];
+    // Nothing to save or clean up: don't touch the modifier tables at all, so items without
+    // add-ons save even where the database hasn't been given add-on permissions yet.
+    if (want.isEmpty && !before.any((a) => a.own)) return shared;
     final marker = '$addonMarker$productId';
     final found = await _get('modifier_groups', {'select': 'id', 'outlet_id': 'eq.$outletId', 'description': 'eq.$marker', 'limit': '1'});
     if (found.isEmpty && want.isEmpty) return shared;
@@ -291,21 +298,78 @@ class MenuAdminApi {
     final linked = await _get('product_modifier_groups', {'select': 'product_id', 'product_id': 'eq.$productId', 'modifier_group_id': 'eq.$groupId'});
     if (linked.isEmpty) await _post('product_modifier_groups', {'product_id': productId, 'modifier_group_id': groupId});
 
+    final saved = await _syncModifiers(groupId, want, [for (final a in before) if (a.own) a], own: true);
+    return [...shared, ...saved];
+  }
+
+  /// Syncs the add-ons of modifier group [groupId] with [want]: update the ones that have an id,
+  /// add new ones, switch off any [before] add-on that was dropped. Returns [want] with ids filled in.
+  Future<List<Addon>> _syncModifiers(String groupId, List<Addon> want, List<Addon> before, {required bool own}) async {
     final keep = {for (final a in want) if (a.id != null) a.id!};
     for (final a in before) {
-      if (a.own && a.id != null && !keep.contains(a.id)) await _patch('modifiers', {'id': 'eq.${a.id}'}, {'is_active': false});
+      if (a.id != null && !keep.contains(a.id)) await _patch('modifiers', {'id': 'eq.${a.id}'}, {'is_active': false});
     }
     final saved = <Addon>[];
     for (final (i, a) in want.indexed) {
       if (a.id != null) {
         await _patch('modifiers', {'id': 'eq.${a.id}'}, {'name': a.name, 'price': a.price, 'display_order': i, 'is_active': true});
-        saved.add(a);
+        saved.add(Addon(a.name, a.price, id: a.id, own: own, groupId: groupId));
       } else {
         final r = await _post('modifiers', {'modifier_group_id': groupId, 'name': a.name, 'price': a.price, 'display_order': i, 'is_active': true});
-        saved.add(Addon(a.name, a.price, id: r['id'] as String?, own: true));
+        saved.add(Addon(a.name, a.price, id: r['id'] as String?, own: own, groupId: groupId));
       }
     }
-    return [...shared, ...saved];
+    return saved;
+  }
+
+  Future<String> _activeVersionId() async {
+    final ver = await _get('menu_versions', {'select': 'id', 'outlet_id': 'eq.$outletId', 'status': 'eq.active', 'limit': '1'});
+    if (ver.isEmpty) throw MenuAdminException('This outlet has no active menu version');
+    return ver.first['id'] as String;
+  }
+
+  /// Creates ([g].id empty) or updates a reusable add-on group of the active menu. [before] is what
+  /// the group had, to know which add-ons were dropped. Returns the group as saved, with ids.
+  Future<AddonGroup> saveAddonGroup(AddonGroup g, List<Addon> before) async {
+    var id = g.id;
+    if (id.isEmpty) {
+      final row = await _post('modifier_groups', {
+        'outlet_id': outletId,
+        'menu_version_id': await _activeVersionId(),
+        'name': g.name,
+        'is_required': false,
+        'min_selections': 0,
+        'max_selections': g.addons.isEmpty ? 1 : g.addons.length,
+        'display_order': 0,
+        'is_active': true,
+      });
+      id = row['id'] as String;
+    } else {
+      await _patch('modifier_groups', {'id': 'eq.$id', 'outlet_id': 'eq.$outletId'}, {'name': g.name});
+    }
+    final saved = await _syncModifiers(id, g.addons, before, own: false);
+    return AddonGroup(id, g.name, saved);
+  }
+
+  /// Switches a reusable group off. Items keep the link; the group simply stops showing, and orders
+  /// already taken keep the add-on names and prices they were sold with.
+  Future<void> deactivateAddonGroup(String id) =>
+      _patch('modifier_groups', {'id': 'eq.$id', 'outlet_id': 'eq.$outletId'}, {'is_active': false});
+
+  /// Links the item to the reusable groups in [want] and unlinks those in [before] that were dropped.
+  Future<void> _syncGroupLinks(String productId, Set<String> want, Set<String> before) async {
+    if (want.length == before.length && want.containsAll(before)) return;
+    for (final gid in before.difference(want)) {
+      final d = await http
+          .delete(_u('product_modifier_groups', {'product_id': 'eq.$productId', 'modifier_group_id': 'eq.$gid'}), headers: _headers(write: true))
+          .timeout(const Duration(seconds: 15));
+      if (d.statusCode >= 300) _fail('product_modifier_groups', d);
+    }
+    final linked = await _get('product_modifier_groups', {'select': 'modifier_group_id', 'product_id': 'eq.$productId'});
+    final have = {for (final r in linked) r['modifier_group_id'] as String};
+    for (final gid in want.difference(before)) {
+      if (!have.contains(gid)) await _post('product_modifier_groups', {'product_id': productId, 'modifier_group_id': gid});
+    }
   }
 
   /// Takes an item off the menu. Kept in the database (inactive) so past
@@ -332,5 +396,6 @@ class MenuAdminApi {
         openPrice: m.openPrice,
         dailyPrice: m.dailyPrice,
         meals: m.meals,
+        addonGroupIds: m.addonGroupIds,
       );
 }

@@ -166,6 +166,9 @@ class PinLockScreen extends StatefulWidget {
   final Future<bool> Function(String pin) onVerify;
   final VoidCallback onSwitchUser;
   final VoidCallback onForgotPin;
+
+  /// Shown instead of "Wrong PIN" when [onVerify] fails for another reason.
+  final String? Function()? failReason;
   const PinLockScreen({
     super.key,
     required this.fullName,
@@ -173,6 +176,7 @@ class PinLockScreen extends StatefulWidget {
     required this.onVerify,
     required this.onSwitchUser,
     required this.onForgotPin,
+    this.failReason,
   });
 
   @override
@@ -206,7 +210,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
       setState(() {
         _checking = false;
         _entry = '';
-        _error = 'Wrong PIN';
+        _error = widget.failReason?.call() ?? 'Wrong PIN';
       });
     }
   }

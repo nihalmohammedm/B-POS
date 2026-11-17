@@ -19,7 +19,10 @@ class OrderTakingScreen extends StatefulWidget {
   /// jumping straight into a takeaway sale from "Fast billing" instead of
   /// landing on dine-in and having to switch.
   final OrderType startType;
-  const OrderTakingScreen({super.key, this.target, this.onDone, this.startType = OrderType.dineIn});
+  /// Opened from Fast billing (counter sale, often back-filling bills): the parcel charge starts at
+  /// ₹0 instead of the automatic ₹5 per item; staff type one only if wanted.
+  final bool fastBilling;
+  const OrderTakingScreen({super.key, this.target, this.onDone, this.startType = OrderType.dineIn, this.fastBilling = false});
   @override
   State<OrderTakingScreen> createState() => _OrderTakingState();
 }
@@ -83,6 +86,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       if (mounted) setState(() {});
     });
     final t = widget.target;
+    if (t == null && widget.fastBilling) _parcelEdited = true;
     if (t != null) {
       type = t.type;
       if (t.type == OrderType.dineIn) {
@@ -825,8 +829,10 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       final t = _parcelAuto.toStringAsFixed(0);
       if (parcelC.text != t) WidgetsBinding.instance.addPostFrameCallback((_) => parcelC.text = t);
     }
-    final tax = sub * .05;
-    final total = (sub + tax + fee).roundToDouble();
+    final mrpSub = cart.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total);
+    final included = mrpSub * .05 / 1.05; // MRP prices already include GST
+    final tax = (sub - mrpSub) * .05 + included;
+    final total = (sub + tax - included + fee).roundToDouble();
     // Short landscape tablets: shrink chrome so the item list gets the room.
     final d = MediaQuery.of(context).size.height < 800;
     final gap = d ? 8.0 : 14.0;
@@ -893,13 +899,13 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 2),
                     child: Text(
-                        'Sub ${inr(sub, decimals: true)} · Tax ${inr(tax, decimals: true)}${fee > 0 ? ' · ${type == OrderType.delivery ? 'Delivery' : 'Parcel'} ${inr(fee, decimals: true)}' : ''}',
+                        'Sub ${inr(sub - included, decimals: true)} · Tax ${inr(tax, decimals: true)}${fee > 0 ? ' · ${type == OrderType.delivery ? 'Delivery' : 'Parcel'} ${inr(fee, decimals: true)}' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: ts(11, c: C.muted)),
                   )
                 else ...[
-                  SumRow('Subtotal', inr(sub, decimals: true)),
+                  SumRow('Subtotal', inr(sub - included, decimals: true)),
                   SumRow('Tax (5%)', inr(tax, decimals: true)),
                   if (fee > 0) SumRow(type == OrderType.delivery ? 'Delivery fee' : 'Parcel charge', inr(fee, decimals: true)),
                   const SizedBox(height: 4),
@@ -992,7 +998,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       if (type == OrderType.takeaway) ...[
         const SizedBox(height: 8),
         Row(children: [
-          Expanded(child: Text('Parcel charge (₹5 per non-MRP item)', style: ts(13, c: C.muted))),
+          Expanded(child: Text(widget.fastBilling ? 'Parcel charge (type if needed)' : 'Parcel charge (₹5 per item)', style: ts(13, c: C.muted))),
           SizedBox(
             width: 90,
             child: TextField(
@@ -1000,7 +1006,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
               keyboardType: TextInputType.number,
               textAlign: TextAlign.right,
               onChanged: (_) => setState(() => _parcelEdited = true),
-              decoration: const InputDecoration(prefixText: '₹ ', isDense: true),
+              decoration: const InputDecoration(prefixText: '₹ ', hintText: '0', isDense: true),
             ),
           ),
         ]),

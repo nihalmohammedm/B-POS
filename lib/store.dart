@@ -12,9 +12,13 @@ import 'db/app_database.dart';
 import 'models.dart';
 import 'link/link_models.dart';
 import 'print_layout.dart';
+import 'dart:io' show Platform;
 import 'sync/bill_sync_api.dart';
+import 'sync/device_api.dart';
+import 'updater.dart';
 import 'sync/menu_admin_api.dart';
 import 'sync/outlet_config_api.dart';
+import 'sync/tables_api.dart';
 import 'sync/web_order_api.dart';
 
 class Store extends ChangeNotifier {
@@ -63,12 +67,15 @@ class Store extends ChangeNotifier {
     this.authUserId = authUserId;
     sessionEmail = email;
     sessionFullName = fullName;
-    sessionAccessToken = accessToken;
+    // An empty token means the PIN unlocked this till offline: no server session yet, so everything
+    // that needs one waits (null token) until AuthGate gets a real one.
+    sessionAccessToken = accessToken.isEmpty ? null : accessToken;
     this.roleCode = roleCode;
     this.roleName = roleName;
     this.permissions = permissions;
     notifyListeners();
     syncOutletConfig();
+    heartbeat();
   }
 
   void clearSession() {
@@ -94,7 +101,7 @@ class Store extends ChangeNotifier {
   final List<Order> history = [];
   final List<Kot> kots = [];
   final List<PosPrinter> printers = [];
-  int _orderSeq = 0, _kotSeq = 0, _billSeq = 0, _taSeq = 0, _printerSeq = 0;
+  int _orderSeq = 0, _kotSeq = 0, _billSeq = 0, _taSeq = 0;
 
   void touch() => notifyListeners();
 
@@ -249,7 +256,8 @@ class Store extends ChangeNotifier {
     await _setSetting('outletPhone', outletPhone);
   }
 
-  Future<void> _savePrinters() async {
+  Future<void> _savePrinters({bool upload = true}) async {
+    if (upload) _markOutletConfigDirty();
     await _db.batch((b) {
       b.deleteAll(_db.printerRows);
       b.insertAll(
@@ -321,6 +329,7 @@ class Store extends ChangeNotifier {
     _periodicSyncTimer = Timer.periodic(const Duration(minutes: 15), (_) => _backgroundSync());
     // Only the Main POS watches the web-order inbox; captain mirrors never talk to the backoffice.
     if (!mirror) _webOrderTimer = Timer.periodic(const Duration(seconds: 20), (_) => pollWebOrders());
+    if (!mirror) _heartbeatTimer = Timer.periodic(const Duration(minutes: 1), (_) => heartbeat());
   }
 
   void _applyConnectivity(List<ConnectivityResult> result, {bool triggerSync = true}) {
@@ -340,6 +349,7 @@ class Store extends ChangeNotifier {
       // lastSyncError is already set by syncMenu; Settings surfaces it.
     }
     await syncOutletConfig();
+    await _flushTables();
     await _syncPendingBills();
   }
 
@@ -485,6 +495,7 @@ class Store extends ChangeNotifier {
     _connectivitySub?.cancel();
     _periodicSyncTimer?.cancel();
     _webOrderTimer?.cancel();
+    _heartbeatTimer?.cancel();
     _saveDebounce?.cancel();
     _notices.close();
     _revoked.close();
@@ -577,6 +588,7 @@ class Store extends ChangeNotifier {
         await api.save(outletId, {
           'print_layout': printLayout.toJson(),
           'meal_periods': mealPeriods.map((p) => p.toJson()).toList(),
+          'pos_config': _posConfigJson(),
         });
         outletConfigDirty = false;
         await _setSetting('outletConfigDirty', '0');
@@ -587,6 +599,7 @@ class Store extends ChangeNotifier {
         final missing = {
           if (row?['print_layout'] == null) 'print_layout': printLayout.toJson(),
           if (row?['meal_periods'] == null) 'meal_periods': mealPeriods.map((p) => p.toJson()).toList(),
+          if (row?['pos_config'] == null) 'pos_config': _posConfigJson(),
         };
         if (missing.isNotEmpty && can('settings.manage')) await api.save(outletId, missing);
         // A newer local edit made while the download was in flight wins.
@@ -599,6 +612,7 @@ class Store extends ChangeNotifier {
             mealPeriods = p.map((e) => MealPeriod.fromJson(e as Map<String, dynamic>)).toList();
             await _setSetting('mealPeriods', jsonEncode(mealPeriods.map((m) => m.toJson()).toList()));
           }
+          if (row['pos_config'] case final Map<String, dynamic> c) await _applyPosConfig(c);
         }
       }
       outletConfigError = null;
@@ -607,6 +621,52 @@ class Store extends ChangeNotifier {
     } finally {
       _syncingOutletConfig = false;
       notifyListeners();
+    }
+  }
+
+  /// Outlet-wide settings that used to live only on each till: the web menu address, which
+  /// printer each KOT group prints on, and the LAN printers. Bluetooth/USB printers belong to the
+  /// one device they are paired with, so they are never uploaded.
+  Map<String, dynamic> _posConfigJson() => {
+        'web_menu_base_url': webMenuBaseUrl,
+        'kot_routes': {for (final e in kotRoutes.entries) e.key: e.value.toList()},
+        'printers': [for (final p in printers) if (p.conn == PrinterConn.lan) p.toJson()],
+      };
+
+  Future<void> _applyPosConfig(Map<String, dynamic> c) async {
+    if (c['web_menu_base_url'] case final String u) {
+      webMenuBaseUrl = u;
+      await _setSetting('webMenuBaseUrl', u);
+    }
+    if (c['printers'] case final List<dynamic> remote) {
+      final lan = <PosPrinter>[];
+      for (final e in remote) {
+        try {
+          lan.add(PosPrinter.fromJson(e as Map<String, dynamic>));
+        } catch (_) {}
+      }
+      // Keep this device's own Bluetooth/USB printers; the outlet's LAN printers replace local LAN ones.
+      final keep = printers.where((p) => p.conn != PrinterConn.lan && !lan.any((l) => l.id == p.id)).toList();
+      final before = jsonEncode([for (final p in printers) p.toJson()]);
+      final merged = [...lan, ...keep];
+      if (jsonEncode([for (final p in merged) p.toJson()]) != before) {
+        printers
+          ..clear()
+          ..addAll(merged);
+        await _savePrinters(upload: false);
+        checkPrinters();
+      }
+    }
+    if (c['kot_routes'] case final Map<String, dynamic> r) {
+      final remote = r.map((k, v) => MapEntry(k, {...(v as List).cast<String>().take(1)}));
+      // Groups the outlet has no route for keep this device's own (e.g. a Bluetooth printer).
+      for (final e in kotRoutes.entries) {
+        remote.putIfAbsent(e.key, () => e.value);
+      }
+      kotRoutes
+        ..clear()
+        ..addAll(remote);
+      await _saveKotConfig(upload: false);
     }
   }
 
@@ -790,6 +850,7 @@ class Store extends ChangeNotifier {
     webMenuBaseUrl = v.trim();
     notifyListeners();
     _setSetting('webMenuBaseUrl', webMenuBaseUrl);
+    _markOutletConfigDirty();
   }
 
   Future<void> refreshWebMenuEnabled() async {
@@ -882,6 +943,82 @@ class Store extends ChangeNotifier {
     await api.decide(w.id, accept: false, reason: reason);
     webOrders.removeWhere((x) => x.id == w.id);
     notifyListeners();
+  }
+
+  // ---------- Main POS devices (Supabase bpos.pos_devices) ----------
+  // Every Main POS registers itself under its posId and sends a heartbeat each minute, so the
+  // outlet can see how many are running. Needs a signed-in user; skipped while offline.
+
+  Timer? _heartbeatTimer;
+  bool _beating = false;
+
+  /// This POS was removed by a manager; it keeps working locally but is no longer listed.
+  bool deviceRemoved = false;
+
+  /// Why the last registration/heartbeat failed, or null when it worked.
+  String? heartbeatError;
+
+  /// Shown in the outlet's device list. Default: this machine's name.
+  String get deviceName {
+    if (kIsWeb) return 'Main POS (browser)';
+    try {
+      final h = Platform.localHostname.trim();
+      if (h.isNotEmpty) return h;
+    } catch (_) {}
+    return 'Main POS';
+  }
+
+  DeviceApi? _deviceApi() {
+    final token = sessionAccessToken;
+    if (token == null || token.isEmpty) return null;
+    return DeviceApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: token);
+  }
+
+  Future<void> heartbeat({bool synced = false}) async {
+    final api = _deviceApi();
+    if (mirror || api == null || !isOnline || _beating || posId.isEmpty || backofficeOutletCode.isEmpty) return;
+    _beating = true;
+    try {
+      String? version;
+      try {
+        if (!kIsWeb) version = (await Updater.appInfo()).versionName;
+      } catch (_) {}
+      final active = await api.register(
+          outletCode: backofficeOutletCode,
+          deviceCode: posId,
+          name: deviceName,
+          appVersion: version,
+          platform: kIsWeb ? 'web' : Platform.operatingSystem,
+          synced: synced);
+      heartbeatError = null;
+      if (active == deviceRemoved) {
+        deviceRemoved = !active;
+        notifyListeners();
+      }
+    } catch (e) {
+      // Offline or backend unreachable: the next beat retries. Kept so Settings can say why.
+      heartbeatError = plainError(e);
+    } finally {
+      _beating = false;
+    }
+  }
+
+  Future<List<PosDeviceInfo>> fetchPosDevices() async {
+    final api = _deviceApi();
+    if (api == null) throw Exception('Sign in to see devices');
+    return api.list(await _resolveOutletId());
+  }
+
+  Future<void> removePosDevice(String id) async {
+    final api = _deviceApi();
+    if (api == null || !isOnline) throw Exception('Go online to change this');
+    await api.remove(id);
+  }
+
+  Future<void> makePosPrimary(String id) async {
+    final api = _deviceApi();
+    if (api == null || !isOnline) throw Exception('Go online to change this');
+    await api.setPrimary(id);
   }
 
   // ---------- bill requests & notices ----------
@@ -1092,7 +1229,8 @@ class Store extends ChangeNotifier {
         return m.kotGroup == groupId;
       }).length;
 
-  Future<void> _saveKotConfig() async {
+  Future<void> _saveKotConfig({bool upload = true}) async {
+    if (upload) _markOutletConfigDirty();
     await _setSetting('kotGroups', jsonEncode(kotGroups.map((g) => g.toJson()).toList()));
     await _setSetting('kotRoutes', jsonEncode({for (final e in kotRoutes.entries) e.key: e.value.toList()}));
   }
@@ -1121,11 +1259,13 @@ class Store extends ChangeNotifier {
   /// it's bumped past the loaded ids — reusing one would make [_savePrinters]
   /// fail on the duplicate key and silently drop the new printer.
   String nextPrinterId() {
-    for (final p in printers) {
-      final n = p.id.startsWith('pr') ? int.tryParse(p.id.substring(2)) : null;
-      if (n != null && n > _printerSeq) _printerSeq = n;
+    // Time-based so two tills adding a printer at the same time can't both create "pr1" and
+    // clash once the outlet's LAN printers are shared between them.
+    var n = DateTime.now().microsecondsSinceEpoch;
+    while (printers.any((p) => p.id == 'pr$n')) {
+      n++;
     }
-    return 'pr${++_printerSeq}';
+    return 'pr$n';
   }
 
   void addPrinter(PosPrinter p) {
@@ -1377,7 +1517,7 @@ class Store extends ChangeNotifier {
     outletBound = true;
     await _saveBackofficeConfig();
     await _saveMenu();
-    await _saveKotConfig();
+    await _saveKotConfig(upload: false);
     await _setSetting('mealPeriods', '[]');
     await _saveOperational();
     notifyListeners();
@@ -1434,7 +1574,10 @@ class Store extends ChangeNotifier {
       outletAddress = result.outlet.address;
       outletPhone = result.outlet.phone;
 
-      // Merge tables in place so a table with a live party mid-sync keeps its seated guests.
+      // Merge tables in place so a table with a live party mid-sync keeps its seated guests. Floor,
+      // size and position come from bpos.tables; a position this till moved and has not uploaded
+      // yet wins, and one only this till knows (layouts made before tables lived in Supabase) is
+      // uploaded instead of being lost.
       final seenTableIds = <String>{};
       for (final t in result.tables) {
         seenTableIds.add(t.id);
@@ -1442,12 +1585,22 @@ class Store extends ChangeNotifier {
         if (i == -1) {
           tables.add(t);
         } else {
-          tables[i]
+          final local = tables[i];
+          final moved = _tablesDirty.contains(t.id);
+          final localOnly = t.gx == null && local.gx != null && local.floor == t.floor;
+          local
             ..floor = t.floor
             ..seats = t.seats
             ..w = t.w
             ..h = t.h
             ..remoteId = t.remoteId;
+          if (!moved && !localOnly) {
+            local
+              ..gx = t.gx
+              ..gy = t.gy;
+          } else if (localOnly) {
+            _tablesDirty.add(t.id);
+          }
         }
       }
       tables.removeWhere((t) => !seenTableIds.contains(t.id) && t.parties.isEmpty);
@@ -1455,9 +1608,11 @@ class Store extends ChangeNotifier {
       final r = MenuSyncResult(added: added, updated: updated, removed: removed, at: DateTime.now());
       lastMenuSync = r.at;
       lastSyncResult = r;
+      heartbeat(synced: true);
       await _saveMenu();
-      await _saveKotConfig();
+      await _saveKotConfig(upload: false);
       await _saveTables();
+      _flushTables();
       return r;
     } catch (e) {
       lastSyncError = e is BackofficeException ? e.message : plainError(e);
@@ -1583,6 +1738,124 @@ class Store extends ChangeNotifier {
   TableModel table(String id) => tables.firstWhere((t) => t.id == id);
   List<TableModel> tablesOn(String floor) => tables.where((t) => t.floor == floor).toList();
 
+  // ---------- table setup (Supabase bpos.tables) ----------
+  // Tables, their floor, size and floor-plan position are stored in the backend so every till shows
+  // the same plan. Adding, editing and removing need a connection; dragging a table also works
+  // offline and uploads when the connection returns.
+
+  final Set<String> _tablesDirty = {};
+  bool _flushingTables = false;
+
+  /// Why the last table upload failed, or null.
+  String? tableSyncError;
+
+  Map<String, dynamic> _tableRow(String outletId, TableModel t, {bool active = true}) => {
+        'outlet_id': outletId,
+        'table_number': t.id,
+        'maximum_occupancy': t.seats,
+        'display_order': math.max(0, tables.indexOf(t)),
+        'floor': t.floor,
+        'grid_x': t.gx,
+        'grid_y': t.gy,
+        'grid_w': t.w,
+        'grid_h': t.h,
+        'is_active': active,
+      };
+
+  TablesApi? _tablesApi() {
+    final token = sessionAccessToken;
+    if (mirror || token == null || token.isEmpty) return null;
+    return TablesApi(baseUrl: backofficeUrl, anonKey: backofficeKey, accessToken: token);
+  }
+
+  /// Uploads tables whose position/size changed here. Quiet when offline: the next try retries.
+  Future<void> _flushTables() async {
+    final api = _tablesApi();
+    if (api == null || !isOnline || _flushingTables || _tablesDirty.isEmpty || !can('settings.manage')) return;
+    _flushingTables = true;
+    final sent = {..._tablesDirty};
+    try {
+      final outletId = await _resolveOutletId();
+      await api.upsert([for (final t in tables) if (sent.contains(t.id)) _tableRow(outletId, t)]);
+      _tablesDirty.removeAll(sent);
+      tableSyncError = null;
+      await _saveTables();
+    } catch (e) {
+      tableSyncError = plainError(e);
+    } finally {
+      _flushingTables = false;
+      notifyListeners();
+    }
+  }
+
+  /// Creates a table (or revives a removed one with the same number) on [floor].
+  Future<void> addTable(String number, int seats, String floor, {int w = 1, int h = 1}) async {
+    final api = _tablesApi();
+    if (api == null || !isOnline) throw Exception('Go online to add a table');
+    if (!can('settings.manage')) throw Exception('Your role cannot change tables');
+    final id = number.trim();
+    if (id.isEmpty) throw Exception('Enter a table number');
+    if (tables.any((t) => t.id.toLowerCase() == id.toLowerCase())) throw Exception('Table $id already exists');
+    final t = TableModel(id, floor.trim().isEmpty ? 'Tables' : floor.trim(), seats, w: w, h: h);
+    tables.add(t);
+    try {
+      final outletId = await _resolveOutletId();
+      await api.upsert([_tableRow(outletId, t)]);
+    } catch (e) {
+      tables.remove(t);
+      rethrow;
+    }
+    notifyListeners();
+    await _saveTables();
+    // The row id is only known to the backend; the next sync fills remoteId in. Do it now so a
+    // bill for this table doesn't wait for the 15-minute background sync.
+    syncMenu().then((_) {}, onError: (_) {});
+  }
+
+  /// Changes seats, floor or size of [t]. The number stays (orders and bills refer to it).
+  Future<void> updateTable(TableModel t, {required int seats, required String floor, required int w, required int h}) async {
+    final api = _tablesApi();
+    if (api == null || !isOnline) throw Exception('Go online to change a table');
+    if (!can('settings.manage')) throw Exception('Your role cannot change tables');
+    if (seats < t.used) throw Exception('${t.used} guests are seated here');
+    final old = (t.seats, t.floor, t.w, t.h, t.gx, t.gy);
+    t
+      ..seats = seats
+      ..floor = floor.trim().isEmpty ? 'Tables' : floor.trim()
+      ..w = w
+      ..h = h;
+    // A new floor or size may overlap what is there: drop the position so it is placed again.
+    if (old.$2 != t.floor || old.$3 != w || old.$4 != h) t.gx = t.gy = null;
+    try {
+      await api.upsert([_tableRow(await _resolveOutletId(), t)]);
+    } catch (e) {
+      t
+        ..seats = old.$1
+        ..floor = old.$2
+        ..w = old.$3
+        ..h = old.$4
+        ..gx = old.$5
+        ..gy = old.$6;
+      rethrow;
+    }
+    notifyListeners();
+    await _saveTables();
+  }
+
+  /// Removes [t] from the plan. The backend row is only deactivated, so past orders and bills that
+  /// refer to it stay valid.
+  Future<void> removeTable(TableModel t) async {
+    final api = _tablesApi();
+    if (api == null || !isOnline) throw Exception('Go online to remove a table');
+    if (!can('settings.manage')) throw Exception('Your role cannot change tables');
+    if (t.parties.isNotEmpty) throw Exception('Table ${t.id} has guests seated');
+    await api.upsert([_tableRow(await _resolveOutletId(), t, active: false)]);
+    tables.remove(t);
+    _tablesDirty.remove(t.id);
+    notifyListeners();
+    await _saveTables();
+  }
+
   // ---------- floor layout ----------
   bool _cellFree(TableModel self, int gx, int gy) {
     for (final o in tables) {
@@ -1637,14 +1910,20 @@ class Store extends ChangeNotifier {
     t.gx = best.$1;
     t.gy = best.$2;
     notifyListeners();
+    _tablesDirty.add(t.id);
+    _flushTables();
   }
 
   /// Forgets saved positions on [floor]; tables flow back into rows automatically.
   void resetLayout(String floor) {
     for (final t in tables) {
-      if (t.floor == floor) t.gx = t.gy = null;
+      if (t.floor == floor) {
+        t.gx = t.gy = null;
+        _tablesDirty.add(t.id);
+      }
     }
     notifyListeners();
+    _flushTables();
   }
 
   String partyLabel(TableModel t, String key) =>

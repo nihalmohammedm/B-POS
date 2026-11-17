@@ -15,7 +15,8 @@ class ReceiptLine {
   final double rate;
   final List<String> mods;
   final String note;
-  ReceiptLine(this.qty, this.name, this.rate, this.mods, this.note);
+  final bool mrp; // MRP items carry no GST
+  ReceiptLine(this.qty, this.name, this.rate, this.mods, this.note, {this.mrp = false});
 }
 
 class ReceiptData {
@@ -118,7 +119,7 @@ class ReceiptData {
       if (ex != null) {
         ex.qty += l.activeQty;
       } else {
-        merged[key] = ReceiptLine(l.activeQty, l.item.name, l.unit, l.mods, '');
+        merged[key] = ReceiptLine(l.activeQty, l.item.name, l.unit, l.mods, '', mrp: l.item.isMrp);
       }
     }
     return ReceiptData(
@@ -446,11 +447,15 @@ class BillTotals {
     final sub = d.lines.fold<double>(0, (a, l) => a + l.qty * l.rate);
     final discount = d.discount.clamp(0, sub).toDouble();
     final discountedSub = sub - discount;
-    final tax = discountedSub * .05, raw = discountedSub + tax + d.fee, total = raw.roundToDouble();
+    final mrpRaw = d.lines.where((l) => l.mrp).fold<double>(0, (a, l) => a + l.qty * l.rate);
+    final mrpGross = sub <= 0 ? 0.0 : discountedSub * mrpRaw / sub; // GST already inside these prices
+    final included = mrpGross * .05 / 1.05;
+    final tax = (discountedSub - mrpGross) * .05 + included;
+    final raw = discountedSub + tax - included + d.fee, total = raw.roundToDouble();
     final cash = d.payments.where((p) => p.method == 'Cash' && p.tendered > 0).toList();
     return BillTotals._(
       d.lines.fold<int>(0, (a, l) => a + l.qty),
-      sub,
+      sub - mrpRaw * .05 / 1.05,
       discount,
       tax,
       total,

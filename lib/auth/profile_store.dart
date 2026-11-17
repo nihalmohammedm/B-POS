@@ -14,6 +14,11 @@ class LocalProfile {
   final String refreshToken;
   final DateTime lastUsedAt;
 
+  /// Permission codes from the last online sign-in, so the PIN can unlock this till with no
+  /// internet. Empty for profiles saved before this existed: they get filled in at the next
+  /// online unlock.
+  final List<String> permissions;
+
   const LocalProfile({
     required this.authUserId,
     required this.email,
@@ -24,6 +29,7 @@ class LocalProfile {
     required this.pinHash,
     required this.refreshToken,
     required this.lastUsedAt,
+    this.permissions = const [],
   });
 
   LocalProfile copyWith({
@@ -34,6 +40,7 @@ class LocalProfile {
     String? pinHash,
     String? refreshToken,
     DateTime? lastUsedAt,
+    List<String>? permissions,
   }) =>
       LocalProfile(
         authUserId: authUserId,
@@ -45,6 +52,7 @@ class LocalProfile {
         pinHash: pinHash ?? this.pinHash,
         refreshToken: refreshToken ?? this.refreshToken,
         lastUsedAt: lastUsedAt ?? this.lastUsedAt,
+        permissions: permissions ?? this.permissions,
       );
 
   Map<String, dynamic> toJson() => {
@@ -57,6 +65,7 @@ class LocalProfile {
         'pinHash': pinHash,
         'refreshToken': refreshToken,
         'lastUsedAt': lastUsedAt.toIso8601String(),
+        'permissions': permissions,
       };
 
   factory LocalProfile.fromJson(Map<String, dynamic> j) => LocalProfile(
@@ -69,6 +78,7 @@ class LocalProfile {
         pinHash: j['pinHash'] as String,
         refreshToken: j['refreshToken'] as String,
         lastUsedAt: DateTime.parse(j['lastUsedAt'] as String),
+        permissions: [for (final e in (j['permissions'] as List? ?? const [])) e as String],
       );
 }
 
@@ -122,6 +132,7 @@ class ProfileStore {
     required String roleCode,
     required String roleName,
     required String refreshToken,
+    List<String>? permissions,
   }) async {
     final all = await list();
     final i = all.indexWhere((p) => p.authUserId == authUserId);
@@ -137,6 +148,7 @@ class ProfileStore {
         pinHash: '',
         refreshToken: refreshToken,
         lastUsedAt: DateTime.now(),
+        permissions: permissions ?? const [],
       );
       all.add(updated);
     } else {
@@ -146,6 +158,7 @@ class ProfileStore {
         roleName: roleName,
         refreshToken: refreshToken,
         lastUsedAt: DateTime.now(),
+        permissions: permissions,
       );
       all[i] = updated;
     }

@@ -34,6 +34,8 @@ class _PosShellState extends State<PosShell> {
   int tab = 0;
   Order? target;
   OrderType _startType = OrderType.dineIn;
+  /// The open order screen came from Fast billing: no automatic parcel charge.
+  bool _fast = false;
   int _gen = 0;
   StreamSubscription<(String, bool)>? _notices;
   int _requestsSeen = 0;
@@ -198,6 +200,7 @@ class _PosShellState extends State<PosShell> {
   void openOrderTaking(Order o) => setState(() {
         target = o;
         _startType = o.type;
+        _fast = false;
         tab = 0;
         _gen++;
       });
@@ -207,6 +210,7 @@ class _PosShellState extends State<PosShell> {
   void fastBilling() => setState(() {
         target = null;
         _startType = OrderType.takeaway;
+        _fast = true;
         tab = 0;
         _gen++;
       });
@@ -251,7 +255,7 @@ class _PosShellState extends State<PosShell> {
     if (served.isNotEmpty && served.last.id != _lastServed) SystemSound.play(SystemSoundType.alert);
     _lastServed = served.isEmpty ? null : served.last.id;
     final body = switch (tab) {
-      0 => OrderTakingScreen(key: ValueKey('ot$_gen'), target: target, startType: _startType, onDone: () => target = null),
+      0 => OrderTakingScreen(key: ValueKey('ot$_gen'), target: target, startType: _startType, fastBilling: _fast, onDone: () => target = null),
       1 => TablesScreen(onAddItems: openOrderTaking),
       2 => OrdersScreen(onAddItems: openOrderTaking),
       3 => const PaymentsScreen(),
@@ -263,6 +267,7 @@ class _PosShellState extends State<PosShell> {
             target = null;
           } else {
             _startType = OrderType.dineIn;
+            _fast = false;
           }
         });
     // Desktop/tablet-landscape keeps the top tab strip; narrow screens get the bottom bar.

@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../backoffice_api.dart';
 import '../plain_error.dart';
 import 'package:flutter/material.dart';
@@ -36,6 +37,12 @@ class _AuthGateState extends State<AuthGate> {
   String? _pendingFullName;
   bool _started = false;
 
+  /// Unlocked with the PIN while offline: identity and permissions come from this device, and a real
+  /// server session is fetched as soon as the connection is back.
+  bool _offlineSession = false;
+  String? _pinFailReason;
+  Timer? _upgradeTimer;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -43,6 +50,12 @@ class _AuthGateState extends State<AuthGate> {
       _started = true;
       _bootstrap();
     }
+  }
+
+  @override
+  void dispose() {
+    _upgradeTimer?.cancel();
+    super.dispose();
   }
 
   SupabaseAuthApi _api() {
@@ -98,6 +111,7 @@ class _AuthGateState extends State<AuthGate> {
       roleCode: profile.roleCode,
       roleName: profile.roleName,
       refreshToken: session.refreshToken,
+      permissions: profile.permissions.toList(),
     );
     if (!mounted) return;
     if (_profileStore.hasPin(local)) {
@@ -178,16 +192,21 @@ class _AuthGateState extends State<AuthGate> {
   Future<bool> _verifyPin(String pin) async {
     final profile = _activeProfile;
     if (profile == null) return false;
+    _pinFailReason = null;
     final ok = await _profileStore.verifyPin(profile.authUserId, pin);
     if (!ok) return false;
+    final s = StoreScope.of(context);
     try {
-      final outletId = await _ensureOutletId();
-      final session = await _api().refreshSession(profile.refreshToken);
+      // Offline (or the server doesn't answer quickly): the PIN alone opens the till.
+      if (!s.isOnline) return _unlockOffline(profile);
+      final outletId = await _ensureOutletId().timeout(const Duration(seconds: 6));
+      final session = await _api().refreshSession(profile.refreshToken).timeout(const Duration(seconds: 6));
       // Throws if no longer linked to this outlet: the catch below then falls
       // back to a full login instead of letting a de-authorized profile in.
-      final profileInfo = await _api().fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId);
+      final profileInfo = await _api()
+          .fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId)
+          .timeout(const Duration(seconds: 6));
       if (!mounted) return true;
-      final s = StoreScope.of(context);
       s.applySession(
         authUserId: session.authUserId,
         email: session.email,
@@ -204,16 +223,95 @@ class _AuthGateState extends State<AuthGate> {
         roleCode: profileInfo.roleCode,
         roleName: profileInfo.roleName,
         refreshToken: session.refreshToken,
+        permissions: profileInfo.permissions.toList(),
       );
       if (!mounted) return true;
+      _offlineSession = false;
       setState(() => _stage = _Stage.authenticated);
       return true;
-    } catch (_) {
-      // Refresh token expired/revoked — the PIN itself was right, so send them to
-      // a normal password sign-in rather than a dead end.
+    } on AuthException {
+      // The server answered and said no (refresh token expired/revoked, or no longer linked to
+      // this outlet): the PIN was right, so send them to a normal password sign-in.
       if (!mounted) return true;
       setState(() => _stage = _Stage.login);
       return true;
+    } catch (_) {
+      // No internet, or the server is unreachable: same as offline.
+      return _unlockOffline(profile);
+    }
+  }
+
+  /// Opens the till from the identity and permissions saved on this device. Only the PIN is
+  /// checked here; the server is asked again as soon as the connection is back.
+  bool _unlockOffline(LocalProfile profile) {
+    if (profile.permissions.isEmpty) {
+      // Saved before permissions were kept on the device: one online sign-in fills them in.
+      _pinFailReason = 'Connect to the internet once to finish setting up offline sign-in';
+      return false;
+    }
+    if (!mounted) return true;
+    StoreScope.of(context).applySession(
+      authUserId: profile.authUserId,
+      email: profile.email,
+      fullName: profile.fullName,
+      accessToken: '',
+      roleCode: profile.roleCode,
+      roleName: profile.roleName,
+      permissions: profile.permissions.toSet(),
+    );
+    _profileStore.touch(profile.authUserId);
+    _offlineSession = true;
+    _upgradeTimer?.cancel();
+    _upgradeTimer = Timer.periodic(const Duration(seconds: 20), (_) => _upgradeSession());
+    setState(() => _stage = _Stage.authenticated);
+    return true;
+  }
+
+  bool _upgrading = false;
+
+  /// Replaces the offline session with a real one once the server is reachable. If the server
+  /// says this user is no longer allowed, the till locks back to the sign-in.
+  Future<void> _upgradeSession() async {
+    final profile = _activeProfile;
+    if (!_offlineSession || _upgrading || profile == null || !mounted) return;
+    final s = StoreScope.of(context);
+    if (!s.isOnline) return;
+    _upgrading = true;
+    try {
+      final outletId = await _ensureOutletId();
+      final session = await _api().refreshSession(profile.refreshToken);
+      final info = await _api().fetchProfile(accessToken: session.accessToken, authUserId: session.authUserId, outletId: outletId);
+      if (!mounted) return;
+      s.applySession(
+        authUserId: session.authUserId,
+        email: session.email,
+        fullName: info.fullName,
+        accessToken: session.accessToken,
+        roleCode: info.roleCode,
+        roleName: info.roleName,
+        permissions: info.permissions,
+      );
+      await _profileStore.upsertIdentity(
+        authUserId: session.authUserId,
+        email: session.email,
+        fullName: info.fullName,
+        roleCode: info.roleCode,
+        roleName: info.roleName,
+        refreshToken: session.refreshToken,
+        permissions: info.permissions.toList(),
+      );
+      _offlineSession = false;
+      _upgradeTimer?.cancel();
+    } on AuthException {
+      if (!mounted) return;
+      _offlineSession = false;
+      _upgradeTimer?.cancel();
+      s.clearSession();
+      setState(() => _stage = _Stage.login);
+    } catch (_) {
+      // Still no usable connection: try again on the next tick.
+    } finally {
+      _upgrading = false;
     }
   }
 
@@ -222,6 +320,8 @@ class _AuthGateState extends State<AuthGate> {
   Future<void> _signOut({required bool forget}) async {
     final s = StoreScope.of(context);
     final id = s.authUserId;
+    _offlineSession = false;
+    _upgradeTimer?.cancel();
     s.clearSession();
     if (forget && id != null) await _profileStore.remove(id);
     final next = forget ? await _profileStore.mostRecentlyUsed() : (id == null ? null : await _profileStore.find(id));
@@ -285,6 +385,7 @@ class _AuthGateState extends State<AuthGate> {
           fullName: p.fullName,
           roleName: p.roleName,
           onVerify: _verifyPin,
+          failReason: () => _pinFailReason,
           onSwitchUser: () => setState(() => _stage = _Stage.addAnotherLogin),
           onForgotPin: () => setState(() => _stage = _Stage.addAnotherLogin),
         );

@@ -673,7 +673,23 @@ class Order {
   /// Subtotal after the discount — tax and the final total are computed on
   /// this, not the raw subtotal, so a discount also reduces tax collected.
   double get discountedSubtotal => (subtotal - discountAmount).clamp(0, subtotal);
-  double get tax => discountedSubtotal * 0.05;
+  /// MRP lines already include GST in their price: the tax is carved out of it (price × 5/105),
+  /// not added on top. [mrpGross] is the post-discount MRP amount; a discount is spread
+  /// proportionally across MRP and non-MRP lines.
+  double get mrpGross {
+    final sub = subtotal;
+    if (sub <= 0) return 0;
+    final mrp = lines.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total);
+    return discountedSubtotal * mrp / sub;
+  }
+  /// GST already inside the MRP prices (not charged on top).
+  double get includedTax => mrpGross * 0.05 / 1.05;
+  /// Total GST on the bill: 5% added on non-MRP items plus the GST inside MRP prices.
+  double get tax => (discountedSubtotal - mrpGross) * 0.05 + includedTax;
+  /// Subtotal shown on bills: listed prices less the GST already inside MRP items.
+  double get netSubtotal => subtotal - subtotalMrpTax;
+  double get subtotalMrpTax =>
+      lines.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total) * 0.05 / 1.05;
   /// Parcel charge: [parcelRate] × the items still live on a takeaway order, skipping MRP and Extra
   /// items. One per item, or (older orders) one per unit.
   double get parcelCharge => type == OrderType.takeaway ? parcelOverride ?? parcelRate * _parcelCount : 0;
@@ -682,7 +698,7 @@ class Order {
       : lines.where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.activeQty);
   double get fee => type == OrderType.delivery ? 40 : parcelCharge;
   String get feeLabel => type == OrderType.delivery ? 'Delivery charge' : 'Parcel charge';
-  double get raw => discountedSubtotal + tax + fee;
+  double get raw => discountedSubtotal + tax - includedTax + fee;
   double get total => raw.roundToDouble();
   /// Lines with anything left after cancellations.
   List<OrderLine> get liveLines => lines.where((l) => l.activeQty > 0).toList();

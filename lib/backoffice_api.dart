@@ -90,21 +90,42 @@ class BackofficeApi {
       if (parent != null) subCatsByParent.putIfAbsent(parent, () => []).add(c['name'] as String);
     }
 
-    // No floor/section or shape column exists yet, so every synced table lands in one flat
-    // group and its tile shape is inferred from seat count: small tables render as a square,
-    // bigger ones as a wider rectangle.
-    final tableRows = await _get('tables', {
-      'select': 'id,table_number,maximum_occupancy,display_order',
-      'outlet_id': 'eq.$outletId',
-      'is_active': 'eq.true',
-      'order': 'display_order.asc',
-    });
+    // Floor, size and floor-plan position live in bpos.tables since supabase_tables_config.sql. A
+    // backend that has not run that migration yet still works: tables fall back to one "Tables"
+    // floor with a size guessed from the seat count.
+    List<dynamic> tableRows;
+    var hasLayout = true;
+    try {
+      tableRows = await _get('tables', {
+        'select': 'id,table_number,maximum_occupancy,display_order,floor,grid_x,grid_y,grid_w,grid_h',
+        'outlet_id': 'eq.$outletId',
+        'is_active': 'eq.true',
+        'order': 'display_order.asc',
+      });
+    } on BackofficeException {
+      hasLayout = false;
+      tableRows = await _get('tables', {
+        'select': 'id,table_number,maximum_occupancy,display_order',
+        'outlet_id': 'eq.$outletId',
+        'is_active': 'eq.true',
+        'order': 'display_order.asc',
+      });
+    }
     final tables = [
       for (final t in tableRows)
         () {
           final seats = t['maximum_occupancy'] as int;
-          final (w, h) = switch (seats) { <= 4 => (1, 1), <= 8 => (2, 1), _ => (2, 2) };
-          return TableModel(t['table_number'] as String, 'Tables', seats, w: w, h: h, remoteId: t['id'] as String?);
+          final (gw, gh) = switch (seats) { <= 4 => (1, 1), <= 8 => (2, 1), _ => (2, 2) };
+          final floor = hasLayout ? (t['floor'] as String?)?.trim() : null;
+          final tm = TableModel(t['table_number'] as String, floor == null || floor.isEmpty ? 'Tables' : floor, seats,
+              w: hasLayout ? (t['grid_w'] as num?)?.toInt() ?? gw : gw,
+              h: hasLayout ? (t['grid_h'] as num?)?.toInt() ?? gh : gh,
+              remoteId: t['id'] as String?);
+          if (hasLayout && t['grid_x'] != null && t['grid_y'] != null) {
+            tm.gx = (t['grid_x'] as num).toInt();
+            tm.gy = (t['grid_y'] as num).toInt();
+          }
+          return tm;
         }()
     ];
 

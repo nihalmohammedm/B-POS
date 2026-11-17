@@ -21,11 +21,12 @@ class OutletConfigApi {
         'Content-Type': 'application/json',
       };
 
-  /// The outlet's saved config: `print_layout` (object) and `meal_periods` (list), either
+  /// The outlet's saved config: `print_layout` (object), `meal_periods` (list) and `pos_config`
+  /// (object: web menu address, KOT routes, LAN printers), each
   /// null when never saved. Null overall when the outlet has no settings row yet.
   Future<Map<String, dynamic>?> fetch(String outletId) async {
     final uri = Uri.parse('$_root/rest/v1/outlet_settings')
-        .replace(queryParameters: {'select': 'print_layout,meal_periods', 'outlet_id': 'eq.$outletId', 'limit': '1'});
+        .replace(queryParameters: {'select': 'print_layout,meal_periods,pos_config', 'outlet_id': 'eq.$outletId', 'limit': '1'});
     final res = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 15));
     if (res.statusCode >= 300) throw Exception(plainHttpError(res.statusCode));
     final rows = jsonDecode(res.body) as List<dynamic>;

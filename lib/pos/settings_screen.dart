@@ -10,6 +10,8 @@ import '../widgets/common.dart';
 import 'captains_screen.dart';
 import 'kot_groups_screen.dart';
 import 'addon_groups_panel.dart';
+import 'devices_panel.dart';
+import 'tables_panel.dart';
 import 'meal_periods_panel.dart';
 import 'menu_editor_screen.dart';
 import 'todays_prices_screen.dart';
@@ -25,7 +27,9 @@ enum _Sec {
   addonGroups('Add-on groups', Icons.add_circle_outline),
   mealTimes('Meal times', Icons.schedule),
   bills('Settled bills', Icons.receipt_long_outlined),
+  tables('Tables', Icons.table_restaurant_outlined),
   printers('Printers', Icons.print_outlined),
+  devices('Main POS devices', Icons.devices),
   captains('Captains', Icons.phone_android),
   kot('KOT groups', Icons.restaurant_outlined),
   layout('Print layout', Icons.description_outlined),
@@ -235,7 +239,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _Sec.addonGroups => [const AddonGroupsPanel()],
       _Sec.mealTimes => [const MealPeriodsPanel()],
       _Sec.bills => [_billSyncPanel(s)],
+      _Sec.tables => [const TablesPanel()],
       _Sec.printers => [_printersPanel(s)],
+      _Sec.devices => [const DevicesPanel()],
       _Sec.captains => [_captainsPanel(s)],
       _Sec.kot => [_kotGroupsPanel(s)],
       _Sec.layout => [_printLayoutPanel(s)],

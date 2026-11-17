@@ -545,7 +545,7 @@ class _TableDetailsState extends State<TableDetails> {
         child: Column(children: [
           const Align(alignment: Alignment.centerLeft, child: Label('Payment summary')),
           const SizedBox(height: 6),
-          SumRow('Subtotal (${o.itemCount} items)', inr(o.subtotal, decimals: true)),
+          SumRow('Subtotal (${o.itemCount} items)', inr(o.netSubtotal, decimals: true)),
           if (o.discountAmount > 0)
             SumRow('Discount${o.discountReason == null ? '' : ' · ${o.discountReason}'}', '-${inr(o.discountAmount, decimals: true)}'),
           SumRow('Tax (5%)', inr(o.tax, decimals: true)),

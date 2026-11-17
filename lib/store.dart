@@ -1059,7 +1059,8 @@ class Store extends ChangeNotifier {
         orderId: o.id,
         kotNo: k.no,
         label: titleOf(o),
-        station: station,
+        // The kitchen section (Grill, Bread…) reads better than the display's device name.
+        station: kotGroup(k.group)?.name ?? station,
         items: items,
         handedOver: o.type != OrderType.dineIn,
         at: DateTime.now()));

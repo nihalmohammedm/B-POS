@@ -82,6 +82,14 @@ class _KdsScreenState extends State<KdsScreen> {
   /// KOTs with a request in flight to the POS, so a double tap sends once.
   final _busy = <int>{};
 
+  /// Tickets whose Start was tapped here: they stop ringing at once, without waiting for the
+  /// POS to confirm.
+  final _started = <int>{};
+  DateTime _lastRing = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Seconds between rings while a ticket is still waiting for someone to tap Start.
+  static const _repeatSecs = 6;
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +98,7 @@ class _KdsScreenState extends State<KdsScreen> {
     });
     WakelockPlus.enable().catchError((_) {}); // a kitchen screen must not go dark
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      _nag();
       if (mounted) setState(() {});
     });
   }
@@ -118,6 +127,18 @@ class _KdsScreenState extends State<KdsScreen> {
   List<Kot> _visible() => _s.kitchenKots.where((k) => prefs.shows(k.group)).toList();
   Set<int> _visibleNos() => {for (final k in _visible()) k.no};
 
+  /// Keeps ringing while any order ticket has not been started. Start is the cook saying "I've
+  /// seen it", so the bell stops there and nowhere else (the bell switch in the header mutes it).
+  void _nag() {
+    if (!mounted || !prefs.sound) return;
+    final waiting = _visible().any((k) => k.kind != KotKind.cancel && k.stage == KotStage.fresh && !_started.contains(k.no));
+    if (!waiting) return;
+    final now = DateTime.now();
+    if (now.difference(_lastRing).inSeconds < _repeatSecs) return;
+    _lastRing = now;
+    bell.ring();
+  }
+
   /// Each snapshot from the POS: ring for tickets this display hasn't seen.
   void _onLink() {
     final at = _link?.lastSnapshotAt;
@@ -129,16 +150,19 @@ class _KdsScreenState extends State<KdsScreen> {
     if (seen == null || !prefs.sound) return;
     final fresh = now.where((k) => !seen.contains(k.no)).toList();
     if (fresh.isEmpty) return;
+    _lastRing = DateTime.now();
     bell.ring(times: fresh.any((k) => k.kind != KotKind.order) ? 2 : 1);
   }
 
   Future<void> _send(Kot k, String cmd, [Map<String, dynamic> extra = const {}]) async {
     final link = _link;
     if (link == null || !_busy.add(k.no)) return;
+    if (cmd == 'kdsStart') _started.add(k.no);
     setState(() {});
     try {
       await link.call(cmd, {'kot': k.no, ...extra});
     } on LinkError catch (e) {
+      if (cmd == 'kdsStart') _started.remove(k.no); // not started after all: keep ringing
       if (mounted) toast(context, e.message, error: true);
     } finally {
       _busy.remove(k.no);

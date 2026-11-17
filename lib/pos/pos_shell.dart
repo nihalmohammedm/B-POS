@@ -167,7 +167,7 @@ class _PosShellState extends State<PosShell> {
     );
   }
 
-  /// "Grill ready · Table 12 · 1× Alfaham" from a kitchen display.
+  /// "Item ready · Table 12 · 1× Alfaham · Grill" from a kitchen display.
   Widget _served(Store s, ServedNotice n, {int clearAll = 0}) => Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
@@ -178,9 +178,10 @@ class _PosShellState extends State<PosShell> {
           Expanded(
             child: Text.rich(
               TextSpan(children: [
-                TextSpan(text: '${n.station} ready · ', style: ts(16, w: w5, c: Colors.white)),
+                TextSpan(text: 'Item ready · ', style: ts(16, w: w7, c: Colors.white)),
                 TextSpan(text: n.label, style: ts(16, w: w7, c: Colors.white)),
                 if (n.items.isNotEmpty) TextSpan(text: ' · ${n.items}', style: ts(15, c: Colors.white)),
+                if (n.station.isNotEmpty) TextSpan(text: ' · ${n.station}', style: ts(15, c: const Color(0xDDFFFFFF))),
                 TextSpan(text: '  ${elapsed(n.at)} ago', style: ts(13, c: const Color(0xDDFFFFFF))),
               ]),
               maxLines: 2,

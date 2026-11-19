@@ -830,8 +830,9 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       if (parcelC.text != t) WidgetsBinding.instance.addPostFrameCallback((_) => parcelC.text = t);
     }
     final mrpSub = cart.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total);
-    final included = mrpSub * .05 / 1.05; // MRP prices already include GST
-    final tax = (sub - mrpSub) * .05 + included;
+    final gstOn = Order.outletGst;
+    final included = gstOn ? mrpSub * .05 / 1.05 : 0.0; // MRP prices already include GST
+    final tax = gstOn ? (sub - mrpSub) * .05 + included : 0.0;
     final total = (sub + tax - included + fee).roundToDouble();
     // Short landscape tablets: shrink chrome so the item list gets the room.
     final d = MediaQuery.of(context).size.height < 800;

@@ -688,7 +688,23 @@ class Store extends ChangeNotifier {
   bool itemInPeriod(MenuItem m, MealPeriod? p) => p == null || (m.meals.isNotEmpty ? m.meals.contains(p.id) : catInPeriod(m.cat, p));
 
   // ---------- print layout ----------
-  PrintLayout printLayout = PrintLayout();
+  PrintLayout _printLayout = PrintLayout();
+  PrintLayout get printLayout => _printLayout;
+  set printLayout(PrintLayout l) {
+    _printLayout = l;
+    _applyGst();
+  }
+
+  /// GST on/off is an outlet-wide setting (kept in the synced print layout). New orders
+  /// pick it up; orders still open follow a change; settled orders keep what they were billed with.
+  void _applyGst() {
+    Order.outletGst = _printLayout.gstEnabled;
+    for (final o in orders) {
+      if (!o.isPaid) o.gstEnabled = _printLayout.gstEnabled;
+    }
+  }
+
+  void setGstEnabled(bool on) => editPaymentQr((l) => l.gstEnabled = on);
 
   void setPrintLayout(PrintLayout l) {
     printLayout = l.copy();

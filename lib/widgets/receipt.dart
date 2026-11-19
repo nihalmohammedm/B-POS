@@ -33,6 +33,7 @@ class ReceiptData {
   /// Bill only: flat ₹ knocked off the subtotal before tax, and why.
   final double discount;
   final String discountReason;
+  final bool gst; // false: no GST on this bill
   final List<Payment> payments;
   final bool reprint;
   /// KOT only: normal, cancellation, or modified item.
@@ -65,6 +66,7 @@ class ReceiptData {
     this.feeLabel = 'Delivery charge',
     this.discount = 0,
     this.discountReason = '',
+    this.gst = true,
     this.payments = const [],
     this.reprint = false,
     this.kind = KotKind.order,
@@ -138,6 +140,7 @@ class ReceiptData {
       feeLabel: o.feeLabel,
       discount: o.discountAmount,
       discountReason: o.discountReason ?? '',
+      gst: o.gstEnabled,
       payments: payments ?? o.payments,
       lines: merged.values.toList(),
     );
@@ -383,7 +386,9 @@ class ReceiptView extends StatelessWidget {
       const _Dash(),
       _kv('Subtotal (${t.items} items)', _n(t.sub)),
       if (t.discount > 0) _kv('Discount${d.discountReason.isEmpty ? '' : ' · ${d.discountReason}'}', '-${_n(t.discount)}'),
-      if (l.billSplitGst) ...[
+      if (!d.gst)
+        const SizedBox.shrink()
+      else if (l.billSplitGst) ...[
         _kv('CGST @2.5%', _n(t.tax / 2)),
         _kv('SGST @2.5%', _n(t.tax / 2)),
       ] else
@@ -449,13 +454,13 @@ class BillTotals {
     final discountedSub = sub - discount;
     final mrpRaw = d.lines.where((l) => l.mrp).fold<double>(0, (a, l) => a + l.qty * l.rate);
     final mrpGross = sub <= 0 ? 0.0 : discountedSub * mrpRaw / sub; // GST already inside these prices
-    final included = mrpGross * .05 / 1.05;
-    final tax = (discountedSub - mrpGross) * .05 + included;
+    final included = d.gst ? mrpGross * .05 / 1.05 : 0.0;
+    final tax = d.gst ? (discountedSub - mrpGross) * .05 + included : 0.0;
     final raw = discountedSub + tax - included + d.fee, total = raw.roundToDouble();
     final cash = d.payments.where((p) => p.method == 'Cash' && p.tendered > 0).toList();
     return BillTotals._(
       d.lines.fold<int>(0, (a, l) => a + l.qty),
-      sub - mrpRaw * .05 / 1.05,
+      d.gst ? sub - mrpRaw * .05 / 1.05 : sub,
       discount,
       tax,
       total,
@@ -665,7 +670,9 @@ Future<List<int>> receiptBytes(ReceiptData d, {PrintLayout? layout}) async {
       t.text(dash);
       kv('Subtotal ($items items)', n(tot.sub));
       if (tot.discount > 0) kv('Discount${d.discountReason.isEmpty ? '' : ' · ${d.discountReason}'}', '-${n(tot.discount)}');
-      if (l.billSplitGst) {
+      if (!d.gst) {
+        // GST switched off for this bill
+      } else if (l.billSplitGst) {
         kv('CGST @2.5%', n(tot.tax / 2));
         kv('SGST @2.5%', n(tot.tax / 2));
       } else {

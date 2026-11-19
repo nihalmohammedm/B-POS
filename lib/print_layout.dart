@@ -55,6 +55,7 @@ class PrintLayout {
   bool billShowCustomer;
   bool billShowRate;
   bool billShowMods;
+  bool gstEnabled; // outlet-wide: charge GST on bills at all
   bool billSplitGst; // CGST + SGST lines instead of one GST line
   bool billShowRoundOff;
   bool billShowQr;
@@ -104,6 +105,7 @@ class PrintLayout {
     this.billShowCustomer = true,
     this.billShowRate = true,
     this.billShowMods = true,
+    this.gstEnabled = true,
     this.billSplitGst = true,
     this.billShowRoundOff = true,
     this.billShowQr = true,
@@ -167,6 +169,7 @@ class PrintLayout {
         'billShowCustomer': billShowCustomer,
         'billShowRate': billShowRate,
         'billShowMods': billShowMods,
+        'gstEnabled': gstEnabled,
         'billSplitGst': billSplitGst,
         'billShowRoundOff': billShowRoundOff,
         'billShowQr': billShowQr,
@@ -224,6 +227,7 @@ class PrintLayout {
       billShowCustomer: b('billShowCustomer', d.billShowCustomer),
       billShowRate: b('billShowRate', d.billShowRate),
       billShowMods: b('billShowMods', d.billShowMods),
+      gstEnabled: b('gstEnabled', d.gstEnabled),
       billSplitGst: b('billSplitGst', d.billSplitGst),
       billShowRoundOff: b('billShowRoundOff', d.billShowRoundOff),
       billShowQr: b('billShowQr', d.billShowQr),

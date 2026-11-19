@@ -34,6 +34,7 @@ enum _Sec {
   kot('KOT groups', Icons.restaurant_outlined),
   layout('Print layout', Icons.description_outlined),
   payQr('Payment QR', Icons.qr_code_2),
+  gst('GST', Icons.percent),
   web('Web ordering', Icons.language),
   about('App & updates', Icons.system_update_alt);
 
@@ -246,6 +247,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _Sec.kot => [_kotGroupsPanel(s)],
       _Sec.layout => [_printLayoutPanel(s)],
       _Sec.payQr => [const PaymentQrPanel()],
+      _Sec.gst => [_gstPanel(s)],
       _Sec.web => [_webPanel(s)],
       _Sec.about => [const UpdatePanel()],
     };
@@ -577,6 +579,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Btn.outline('Open',
             icon: Icons.chevron_right,
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TodaysPricesScreen()))),
+      ]),
+    );
+  }
+
+  Widget _gstPanel(Store s) {
+    final on = s.printLayout.gstEnabled;
+    return Panel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('GST', style: ts(17, w: w5)),
+        const SizedBox(height: 4),
+        Text(
+            'Applies to the whole outlet. Off: no GST is charged or printed on bills. Bills already settled keep the tax they were billed with.',
+            style: ts(13, c: C.muted, h: 1.4)),
+        const SizedBox(height: 6),
+        const OutletConfigStatus(),
+        const SizedBox(height: 10),
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => s.setGstEnabled(!on),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(children: [
+              Expanded(child: Text('Charge GST on bills', style: ts(15, w: w5))),
+              Toggle(value: on, scale: .8, onChanged: s.setGstEnabled),
+            ]),
+          ),
+        ),
       ]),
     );
   }

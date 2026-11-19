@@ -644,6 +644,10 @@ class Order {
   /// Resolved to a flat ₹ amount regardless of how staff entered it (fixed
   /// amount or % of subtotal) — see Store.setDiscount.
   double discountAmount = 0;
+  /// Outlet-wide GST switch (Settings › GST), stamped on the order so a later change never alters a settled bill.
+  /// Off = no tax charged (and MRP prices are not carved up).
+  static bool outletGst = true;
+  bool gstEnabled = Order.outletGst;
   String? discountReason;
   /// Takeaway parcel charge per non-MRP item, frozen on the order. 0 for delivery/dine-in and for
   /// orders saved before the charge existed, so history never changes.
@@ -683,13 +687,13 @@ class Order {
     return discountedSubtotal * mrp / sub;
   }
   /// GST already inside the MRP prices (not charged on top).
-  double get includedTax => mrpGross * 0.05 / 1.05;
+  double get includedTax => gstEnabled ? mrpGross * 0.05 / 1.05 : 0;
   /// Total GST on the bill: 5% added on non-MRP items plus the GST inside MRP prices.
-  double get tax => (discountedSubtotal - mrpGross) * 0.05 + includedTax;
+  double get tax => gstEnabled ? (discountedSubtotal - mrpGross) * 0.05 + includedTax : 0;
   /// Subtotal shown on bills: listed prices less the GST already inside MRP items.
   double get netSubtotal => subtotal - subtotalMrpTax;
   double get subtotalMrpTax =>
-      lines.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total) * 0.05 / 1.05;
+      gstEnabled ? lines.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total) * 0.05 / 1.05 : 0;
   /// Parcel charge: [parcelRate] × the items still live on a takeaway order, skipping MRP and Extra
   /// items. One per item, or (older orders) one per unit.
   double get parcelCharge => type == OrderType.takeaway ? parcelOverride ?? parcelRate * _parcelCount : 0;
@@ -739,6 +743,7 @@ class Order {
         'complimentary': complimentary,
         'complimentaryReason': complimentaryReason,
         'discountAmount': discountAmount,
+        'gstEnabled': gstEnabled,
         'discountReason': discountReason,
         'parcelRate': parcelRate,
         'parcelOverride': parcelOverride,
@@ -772,6 +777,7 @@ class Order {
       ..complimentary = j['complimentary'] as bool? ?? false
       ..complimentaryReason = j['complimentaryReason'] as String?
       ..discountAmount = (j['discountAmount'] as num?)?.toDouble() ?? 0
+      ..gstEnabled = j['gstEnabled'] as bool? ?? true
       ..discountReason = j['discountReason'] as String?
       ..parcelRate = (j['parcelRate'] as num?)?.toDouble() ?? 0
       ..parcelOverride = (j['parcelOverride'] as num?)?.toDouble()

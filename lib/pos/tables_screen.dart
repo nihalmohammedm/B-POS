@@ -548,7 +548,7 @@ class _TableDetailsState extends State<TableDetails> {
           SumRow('Subtotal (${o.itemCount} items)', inr(o.netSubtotal, decimals: true)),
           if (o.discountAmount > 0)
             SumRow('Discount${o.discountReason == null ? '' : ' · ${o.discountReason}'}', '-${inr(o.discountAmount, decimals: true)}'),
-          SumRow('Tax (5%)', inr(o.tax, decimals: true)),
+          if (o.gstEnabled) SumRow('Tax (5%)', inr(o.tax, decimals: true)),
           SumRow('Total', inr(o.total, decimals: true), big: true),
         ]),
       ),

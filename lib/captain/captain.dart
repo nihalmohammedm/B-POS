@@ -184,6 +184,7 @@ class _CaptainHomeState extends State<CaptainHome> {
         Wrap(alignment: WrapAlignment.center, spacing: 14, runSpacing: 6, children: [
           for (final (l, bg, border) in const [
             ('Free', Colors.white, Color(0xFFCFCFCF)),
+            ('Seated', seatedColor, seatedColor),
             ('Running', C.sky, C.sky),
             ('Shared', C.skyTint, C.sky),
             ('Reserved', C.green, C.green),
@@ -208,9 +209,10 @@ class _CaptainHomeState extends State<CaptainHome> {
         ? (t.reservedFor != null ? 'Reserved' : 'Free')
         : allBilled
             ? 'Billing'
-            : (ps.length > 1 || t.free > 0 ? 'Shared' : 'Running');
+            : (ps.length > 1 || t.free > 0 ? 'Shared' : (ps.every((p) => s.orderOfParty(t, p)?.lines.isEmpty ?? true) ? 'Seated' : 'Running'));
     final (bg, fg, border) = switch (status) {
       'Running' => (C.sky, Colors.white, C.sky),
+      'Seated' => (seatedColor, Colors.white, seatedColor),
       'Shared' => (C.skyTint, C.skyInk, C.sky),
       'Reserved' => (C.green, Colors.white, C.green),
       'Billing' => (C.amber, Colors.white, C.amber),
@@ -220,11 +222,11 @@ class _CaptainHomeState extends State<CaptainHome> {
     final dots = <Color>[];
     for (var i = 0; i < ps.length; i++) {
       for (var j = 0; j < ps[i].pax; j++) {
-        dots.add(status == 'Running' ? const Color(0xD9FFFFFF) : partyColors[i % partyColors.length]);
+        dots.add(status == 'Running' || status == 'Seated' ? const Color(0xD9FFFFFF) : partyColors[i % partyColors.length]);
       }
     }
     for (var j = 0; j < t.free; j++) {
-      dots.add(status == 'Running' ? const Color(0x59FFFFFF) : const Color(0xFFD6D6D6));
+      dots.add(status == 'Running' || status == 'Seated' ? const Color(0x59FFFFFF) : const Color(0xFFD6D6D6));
     }
     final line1 = switch (status) {
       'Free' => 'Free',
@@ -233,7 +235,7 @@ class _CaptainHomeState extends State<CaptainHome> {
     };
     final line2 = switch (status) {
       'Shared' => '${ps.length} ${ps.length == 1 ? 'party' : 'parties'} · ${t.free} free',
-      'Running' => elapsed(ps.first.seatedAt),
+      'Running' || 'Seated' => elapsed(ps.first.seatedAt),
       'Billing' => 'Bill printed',
       'Free' => 'Tap to seat',
       _ => 'Reserved',
@@ -350,9 +352,8 @@ class _CaptainHomeState extends State<CaptainHome> {
               final segColors = <Color>[];
               for (var i = 0; i < t.parties.length; i++) {
                 final p = t.parties[i];
-                final billed = s.orderOfParty(t, p)?.billed == true;
                 for (var j = 0; j < p.pax; j++) {
-                  segColors.add(billed ? C.amber : partyColors[i % partyColors.length]);
+                  segColors.add(s.partyStateColor(t, p));
                 }
               }
               for (var j = 0; j < t.free; j++) {
@@ -439,7 +440,7 @@ class _CaptainHomeState extends State<CaptainHome> {
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: C.line)),
             child: Row(children: [
-              Dot(color: billed ? C.amber : partyColors[i % partyColors.length], size: 10),
+              Dot(color: s.partyStateColor(t, p), size: 10),
               const SizedBox(width: 12),
               Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -627,7 +628,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
 
   List<String> _cats(Store s) {
     final p = _period(s);
-    return [for (final c in s.categories) if (s.itemsIn(c).any((m) => s.itemInPeriod(m, p))) c];
+    return [for (final c in s.categoriesAz) if (s.itemsIn(c).any((m) => s.itemInPeriod(m, p))) c];
   }
 
   Widget _periodBar(Store s) {
@@ -677,7 +678,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
         final all = s.itemsIn(cat).where(served).toList();
         return subCat == null ? all : all.where((m) => m.subCat == subCat).toList();
       }
-      final menu = s.menu.where(served).toList();
+      final menu = s.menuAz.where(served).toList();
       final pop = [for (final id in popular) ...menu.where((m) => m.id == id)];
       return pop.isNotEmpty ? pop : menu.take(24).toList();
     }
@@ -1085,7 +1086,7 @@ class _CaptainOrderScreenState extends State<CaptainOrderScreen> {
                       Flexible(child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(16, w: w5))),
                     ]),
                     Text(
-                        '${priceLabel(m)}${m.customizable ? ' · ${m.variants.isNotEmpty ? '${m.variants.length} sizes' : 'add-ons'}' : ''}${q.isNotEmpty ? ' · ${m.cat}' : ''}',
+                        '${priceLabel(m)}${priceTags(m).map((t) => ' · $t').join()}${m.customizable ? ' · ${m.variants.isNotEmpty ? '${m.variants.length} sizes' : 'add-ons'}' : ''}${q.isNotEmpty ? ' · ${m.cat}' : ''}',
                         style: ts(13, c: C.muted)),
                   ])),
                 ]),

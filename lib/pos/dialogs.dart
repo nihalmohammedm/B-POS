@@ -499,7 +499,7 @@ Future<(String, String)?> showTablePicker(BuildContext context) {
                                   decoration:
                                       BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: C.line)),
                                   child: Row(children: [
-                                    Dot(color: billed ? C.amber : partyColors[i % partyColors.length], size: 10),
+                                    Dot(color: s.partyStateColor(t, p), size: 10),
                                     const SizedBox(width: 12),
                                     Expanded(
                                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -567,6 +567,13 @@ Future<(String, String)?> showTablePicker(BuildContext context) {
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (s.tables.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        child: Center(
+                            child: Text('No tables set up yet.\nAdd tables in Tables (edit layout), or sync them from Settings.',
+                                textAlign: TextAlign.center, style: ts(14, c: C.muted, h: 1.5))),
+                      ),
                     for (final f in s.floors) ...[
                       Label(f),
                       const SizedBox(height: 8),

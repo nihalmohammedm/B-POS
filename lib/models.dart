@@ -608,10 +608,14 @@ class Refund {
 
 class Order {
   int id;
-  final OrderType type;
-  final String? tableId;
-  final String? partyKey;
+  // Not final: a Fast-billed counter order can later be assigned to a table (Store.assignToTable).
+  OrderType type;
+  String? tableId;
+  String? partyKey;
   String token;
+  /// Created through Fast billing (counter sale, no table). Stays flagged after being assigned to a table.
+  bool fastBilled = false;
+  String get kindLabel => fastBilled && type == OrderType.takeaway ? 'Fast billed' : type.label;
   String customer, phone, address;
   final DateTime at;
   final List<OrderLine> lines = [];
@@ -696,7 +700,7 @@ class Order {
       gstEnabled ? lines.where((l) => l.item.isMrp).fold<double>(0, (a, l) => a + l.total) * 0.05 / 1.05 : 0;
   /// Parcel charge: [parcelRate] × the items still live on a takeaway order, skipping MRP and Extra
   /// items. One per item, or (older orders) one per unit.
-  double get parcelCharge => type == OrderType.takeaway ? parcelOverride ?? parcelRate * _parcelCount : 0;
+  double get parcelCharge => type == OrderType.takeaway || fastBilled ? parcelOverride ?? parcelRate * _parcelCount : 0;
   int get _parcelCount => parcelPerItem
       ? {for (final l in lines) if (l.activeQty > 0 && !l.item.noParcel) l.item.id}.length
       : lines.where((l) => !l.item.isMrp).fold<int>(0, (a, l) => a + l.activeQty);
@@ -725,6 +729,7 @@ class Order {
         'address': address,
         'at': at.toIso8601String(),
         'pax': pax,
+        'fastBilled': fastBilled,
         'billed': billed,
         'held': held,
         'heldAt': heldAt?.toIso8601String(),
@@ -765,6 +770,7 @@ class Order {
       server: j['server'] as String? ?? '',
       payNote: j['payNote'] as String? ?? 'Unpaid',
     )
+      ..fastBilled = j['fastBilled'] as bool? ?? false
       ..billed = j['billed'] as bool? ?? false
       ..held = j['held'] as bool? ?? false
       ..heldAt = DateTime.tryParse(j['heldAt'] as String? ?? '')

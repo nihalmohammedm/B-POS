@@ -1,4 +1,6 @@
+import 'package:flutter/painting.dart' show Color;
 import 'plain_error.dart';
+import 'theme.dart' show seatedColor, orderedColor, billedColor;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -1689,7 +1691,15 @@ class Store extends ChangeNotifier {
 
   // ---------- menu ----------
   MenuItem item(String id) => menu.firstWhere((m) => m.id == id);
-  List<MenuItem> itemsIn(String cat) => menu.where((m) => m.cat == cat).toList();
+  List<MenuItem> itemsIn(String cat) => menu.where((m) => m.cat == cat).toList()..sort(_byName);
+
+  /// Menu items in alphabetical (A–Z) order, for display.
+  List<MenuItem> get menuAz => [...menu]..sort(_byName);
+
+  /// Categories in alphabetical (A–Z) order, for display.
+  List<String> get categoriesAz => [...categories]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+  static int _byName(MenuItem a, MenuItem b) => a.name.toLowerCase().compareTo(b.name.toLowerCase());
 
   /// Distinct sub-categories inside [cat], in first-appearance (display) order.
   List<String> subCatsIn(String cat) {
@@ -1960,7 +1970,32 @@ class Store extends ChangeNotifier {
     return null;
   }
 
+  /// State color of a party at a table: seated (no items) / ordered (items added) / billed.
+  Color partyStateColor(TableModel t, Party p) {
+    final o = orderOfParty(t, p);
+    if (o?.billed == true) return billedColor;
+    return o != null && o.lines.isNotEmpty ? orderedColor : seatedColor;
+  }
+
   Order? orderOfParty(TableModel t, Party p) => p.orderId == null ? null : orderById(p.orderId!);
+
+  /// Puts a Fast-billed counter order on a table: it becomes a dine-in order of [party] (a freshly seated
+  /// party, or a seated one with nothing ordered yet). The bill, payment and parcel charge stay as they
+  /// were. Returns an error message, or null on success.
+  String? assignToTable(Order o, TableModel t, Party party) {
+    if (!o.fastBilled || o.type != OrderType.takeaway || !orders.contains(o)) return 'Only an open Fast-billed order can be assigned to a table';
+    final ex = orderOfParty(t, party);
+    if (ex != null && ex.lines.isNotEmpty) return 'Table ${partyLabel(t, party.key)} already has an order';
+    if (ex != null) orders.remove(ex);
+    o
+      ..type = OrderType.dineIn
+      ..tableId = t.id
+      ..partyKey = party.key
+      ..pax = party.pax;
+    party.orderId = o.id;
+    notifyListeners();
+    return null;
+  }
 
   Party seatParty(TableModel t, int pax) {
     const letters = 'ABCDEFGHIJKL';
@@ -2218,6 +2253,11 @@ class Store extends ChangeNotifier {
   /// Shared tail of [settle]/[settleComplimentary]: close the order out of
   /// the active lists, archive it, and queue the background Supabase push.
   void _archive(Order o) {
+    // Billed and paid: the food has been served / handed over, so the archived order must not
+    // keep showing Queued/Preparing lines.
+    for (final l in o.lines) {
+      l.state = LineState.served;
+    }
     orders.remove(o);
     kots.removeWhere((k) => k.orderId == o.id);
     if (o.type == OrderType.dineIn) table(o.tableId!).parties.removeWhere((p) => p.orderId == o.id);

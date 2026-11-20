@@ -234,6 +234,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
         return;
       }
       o = existing ?? s.draft(type);
+      if (existing == null && widget.fastBilling && type == OrderType.takeaway) o.fastBilled = true;
       if (o.billed) {
         toast(context, o.isPaid ? 'Already paid · start a new takeaway order' : 'Bill already printed · reopen it first', error: true);
         return;
@@ -368,7 +369,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
 
   List<String> _cats(Store s) {
     final p = _period(s);
-    return [for (final c in s.categories) if (s.itemsIn(c).any((m) => s.itemInPeriod(m, p))) c];
+    return [for (final c in s.categoriesAz) if (s.itemsIn(c).any((m) => s.itemInPeriod(m, p))) c];
   }
 
   int _count(Store s, String? c) {
@@ -418,7 +419,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   List<MenuItem> _matches(Store s) {
     final q = query.trim().toLowerCase();
     final p = _period(s);
-    return s.menu
+    return s.menuAz
         .where((m) =>
             s.itemInPeriod(m, p) &&
             (cat == null || m.cat == cat) &&
@@ -426,6 +427,93 @@ class _OrderTakingState extends State<OrderTakingScreen> {
             (!vegOnly || m.veg) &&
             (q.isEmpty || m.name.toLowerCase().contains(q) || m.code.startsWith(q)))
         .toList();
+  }
+
+  /// Search field with an autocomplete list of matching item names (A–Z; code / prefix matches first).
+  Widget _searchBox(Store s) {
+    List<MenuItem> options(String raw) {
+      final q = raw.trim().toLowerCase();
+      if (q.isEmpty) return const [];
+      final p = _period(s);
+      int rank(MenuItem m) {
+        final n = m.name.toLowerCase();
+        if (m.code.toLowerCase() == q) return 0;
+        if (n.startsWith(q)) return 1;
+        if (n.split(RegExp(r'\s+')).any((w) => w.startsWith(q))) return 2;
+        return 3;
+      }
+
+      return [
+        for (final m in s.menuAz)
+          if (s.itemInPeriod(m, p) &&
+              (!vegOnly || m.veg) &&
+              (m.name.toLowerCase().contains(q) || m.code.startsWith(q)))
+            m
+      ]
+        ..sort((a, b) => rank(a) - rank(b));
+    }
+
+    return RawAutocomplete<MenuItem>(
+      textEditingController: searchC,
+      focusNode: searchF,
+      displayStringForOption: (m) => m.name,
+      optionsBuilder: (v) => options(v.text),
+      onSelected: (m) async {
+        if (s.offReason(m) != null) {
+          toast(context, '${m.name} is not available', error: true);
+          return;
+        }
+        await add(m);
+        if (!mounted) return;
+        setState(() {
+          query = '';
+          searchC.clear();
+        });
+        searchF.requestFocus();
+      },
+      fieldViewBuilder: (context, controller, focusNode, onSubmit) => TextField(
+        controller: controller,
+        focusNode: focusNode,
+        onChanged: (v) => setState(() => query = v),
+        onSubmitted: (_) => _addTopMatch(s),
+        decoration: InputDecoration(
+            hintText: hasKeyboard ? 'Search items or code   /' : 'Search items or code',
+            prefixIcon: const Icon(Icons.search, size: 20)),
+      ),
+      optionsViewBuilder: (context, onSelected, opts) => Align(
+        alignment: Alignment.topLeft,
+        child: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(10),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360, maxHeight: 320),
+            child: ListView.builder(
+              padding: EdgeInsets.zero,
+              shrinkWrap: true,
+              itemCount: opts.length,
+              itemBuilder: (c, i) {
+                final m = opts.elementAt(i);
+                final hi = AutocompleteHighlightedOption.of(c) == i;
+                final off = s.offReason(m) != null;
+                return InkWell(
+                  onTap: () => onSelected(m),
+                  child: Container(
+                    color: hi ? C.soft2 : null,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(m.name,
+                              maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(14, w: w5, c: off ? C.muted : C.ink))),
+                      Text(m.code, style: ts(12, c: C.muted)),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// Enter in the search box: add the best match (an exact item code wins),
@@ -478,18 +566,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
       SliverToBoxAdapter(
         child: Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('Menu', style: ts(22, w: w5)),
-          SizedBox(
-            width: 280,
-            child: TextField(
-              controller: searchC,
-              focusNode: searchF,
-              onChanged: (v) => setState(() => query = v),
-              onSubmitted: (_) => _addTopMatch(s),
-              decoration: InputDecoration(
-                  hintText: hasKeyboard ? 'Search items or code   /' : 'Search items or code',
-                  prefixIcon: const Icon(Icons.search, size: 20)),
-            ),
-          ),
+          SizedBox(width: 280, child: _searchBox(s)),
           FilterChip(
             label: const Text('Veg only'),
             selected: vegOnly,
@@ -547,7 +624,7 @@ class _OrderTakingState extends State<OrderTakingScreen> {
   List<Widget> _itemSlivers(Store s, List<MenuItem> items, Map<String, int> qtyBy) {
     SliverGrid grid(List<MenuItem> list) => SliverGrid(
           gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 250, mainAxisExtent: 176, crossAxisSpacing: 12, mainAxisSpacing: 12),
+              maxCrossAxisExtent: 250, mainAxisExtent: 204, crossAxisSpacing: 12, mainAxisSpacing: 12),
           delegate: SliverChildBuilderDelegate((c, i) => _itemCard(s, list[i], qtyBy[list[i].id] ?? 0), childCount: list.length),
         );
     if (cat == null || s.subCatsIn(cat!).isEmpty) return [grid(items)];
@@ -746,6 +823,14 @@ class _OrderTakingState extends State<OrderTakingScreen> {
                 ],
               ]),
               const Spacer(),
+              if (priceTags(m).isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Wrap(spacing: 4, runSpacing: 4, children: [
+                    for (final t in priceTags(m))
+                      Pill(t, bg: C.skyTint, fg: C.blueDeep, size: 11, pad: const EdgeInsets.symmetric(horizontal: 7, vertical: 2)),
+                  ]),
+                ),
               Row(children: [
                 Text(priceLabel(m), style: ts(15, w: w6)),
                 const Spacer(),

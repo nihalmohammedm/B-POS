@@ -27,6 +27,15 @@ class TablesPanel extends StatelessWidget {
     }
   }
 
+  Future<void> _sync(BuildContext context, Store s) async {
+    try {
+      await s.syncMenu();
+      if (context.mounted) toast(context, '${s.tables.length} table${s.tables.length == 1 ? '' : 's'} synced');
+    } catch (e) {
+      if (context.mounted) toast(context, plainError(e), error: true);
+    }
+  }
+
   Future<void> _remove(BuildContext context, Store s, TableModel t) async {
     final ok = await confirmDialog(context,
         title: 'Remove table ${t.id}?',
@@ -50,7 +59,12 @@ class TablesPanel extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Expanded(child: Text('Tables', style: ts(17, w: w5))),
-          if (canManage) Btn('Add table', icon: Icons.add, height: 40, onTap: () => _edit(context, s, null)),
+          Btn.outline(s.syncingMenu ? 'Syncing…' : 'Sync tables',
+              icon: Icons.sync, height: 40, onTap: s.syncingMenu ? null : () => _sync(context, s)),
+          if (canManage) ...[
+            const SizedBox(width: 10),
+            Btn('Add table', icon: Icons.add, height: 40, onTap: () => _edit(context, s, null)),
+          ],
         ]),
         const SizedBox(height: 4),
         Text('${s.tables.length} table${s.tables.length == 1 ? '' : 's'} · saved to your account, shared by every till. '

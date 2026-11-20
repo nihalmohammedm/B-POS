@@ -90,9 +90,10 @@ class _TablesScreenState extends State<TablesScreen> {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               for (final (label, color) in const [
                 ('Available', Color(0xFFDCDCDC)),
-                ('Occupied', C.sky),
+                ('Seated', seatedColor),
+                ('Ordered', orderedColor),
                 ('Reserved', C.green),
-                ('Billing', C.amber),
+                ('Billing', billedColor),
               ]) ...[
                 Dot(color: color, size: 9),
                 const SizedBox(width: 6),
@@ -258,7 +259,7 @@ class _TablesScreenState extends State<TablesScreen> {
     final seatColors = <Color>[];
     for (var i = 0; i < t.parties.length; i++) {
       final p = t.parties[i];
-      final c = s.orderOfParty(t, p)?.billed == true ? C.amber : partyColors[i % partyColors.length];
+      final c = s.partyStateColor(t, p);
       for (var j = 0; j < p.pax; j++) {
         seatColors.add(c);
       }
@@ -333,7 +334,7 @@ class _TablesScreenState extends State<TablesScreen> {
       final p = t.parties[i];
       final o = s.orderOfParty(t, p);
       final billed = o?.billed == true;
-      final c = billed ? C.amber : partyColors[i % partyColors.length];
+      final c = s.partyStateColor(t, p);
       parts.add(Expanded(
         flex: p.pax,
         child: Container(
@@ -347,7 +348,7 @@ class _TablesScreenState extends State<TablesScreen> {
                   bg: const Color(0x40FFFFFF), fg: Colors.white, size: 12, pad: const EdgeInsets.symmetric(horizontal: 8, vertical: 2)),
               const SizedBox(height: 6),
               if (o != null && o.lines.isNotEmpty) Text(inr(o.total), style: ts(13, w: w5, c: Colors.white)),
-              Text(billed ? 'Billing' : elapsed(p.seatedAt), style: ts(11, c: Colors.white)),
+              Text(billed ? 'Billing' : (o == null || o.lines.isEmpty ? 'Seated · ' : '') + elapsed(p.seatedAt), style: ts(11, c: Colors.white)),
             ]),
           ),
         ),
@@ -400,9 +401,10 @@ class _TableDetailsState extends State<TableDetails> {
         ? (t.reservedFor != null ? 'Reserved' : 'Available')
         : allBilled
             ? 'Billing'
-            : (t.parties.length > 1 || t.free > 0 ? 'Shared' : 'Occupied');
+            : (t.parties.length > 1 || t.free > 0 ? 'Shared' : (t.parties.every((x) => (s.orderOfParty(t, x)?.lines.isEmpty ?? true)) ? 'Seated' : 'Ordered'));
     final (sBg, sFg) = switch (status) {
       'Billing' => (C.amberTint, C.amberInk),
+      'Seated' => (C.purpleTint, C.purpleInk),
       'Reserved' => (C.greenTint, C.greenInk),
       'Available' => (C.soft, C.ink2),
       _ => (C.skyTint, C.skyInk),
@@ -438,7 +440,7 @@ class _TableDetailsState extends State<TableDetails> {
     final boxes = <Widget>[];
     for (var i = 0; i < t.parties.length; i++) {
       final p = t.parties[i];
-      final c = s.orderOfParty(t, p)?.billed == true ? C.amber : partyColors[i % partyColors.length];
+      final c = s.partyStateColor(t, p);
       for (var j = 0; j < p.pax; j++) {
         boxes.add(_seat(c, p.key, Colors.white));
       }
@@ -464,7 +466,6 @@ class _TableDetailsState extends State<TableDetails> {
 
   Widget _partyChip(Store s, TableModel t, Party p, int i) {
     final on = p.key == selKey;
-    final billed = s.orderOfParty(t, p)?.billed == true;
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(12),
@@ -476,7 +477,7 @@ class _TableDetailsState extends State<TableDetails> {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: on ? C.ink : C.line, width: on ? 2 : 1)),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Dot(color: billed ? C.amber : partyColors[i % partyColors.length]),
+            Dot(color: s.partyStateColor(t, p)),
             const SizedBox(width: 6),
             Text(s.partyLabel(t, p.key), style: ts(15, w: w5)),
             const SizedBox(width: 6),

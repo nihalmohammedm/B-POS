@@ -29,6 +29,11 @@ class C {
   static const purpleInk = Color(0xFF6A45A8);
 }
 
+/// Table/party state colors: seated with no items yet, items on the order, bill printed.
+const seatedColor = C.purple;
+const orderedColor = C.sky;
+const billedColor = C.amber;
+
 const partyColors = [C.sky, C.purple, Color(0xFF2FA39A), C.green, C.red, Color(0xFF6B6461)];
 
 /// (strong, tint) pairs, picked deterministically per category name so a category

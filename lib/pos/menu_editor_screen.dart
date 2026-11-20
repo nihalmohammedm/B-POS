@@ -30,7 +30,7 @@ class _MenuEditorScreenState extends State<MenuEditorScreen> {
     final s = StoreScope.of(context);
     final q = _q.trim().toLowerCase();
     final cats = [
-      for (final c in s.categories)
+      for (final c in s.categoriesAz)
         (c, [for (final m in s.itemsIn(c)) if (q.isEmpty || m.name.toLowerCase().contains(q) || m.code.toLowerCase().contains(q)) m]),
     ].where((e) => e.$2.isNotEmpty).toList();
     final canEdit = s.canEditMenu;
@@ -116,7 +116,7 @@ class _MenuEditorScreenState extends State<MenuEditorScreen> {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(m.name, style: ts(15, w: w5, c: off != null ? C.muted : C.ink)),
-              Text([if (m.code.isNotEmpty) m.code, if (m.variants.isNotEmpty) '${m.variants.length} sizes', if (g != null) g].join(' · '),
+              Text([if (m.code.isNotEmpty) m.code, if (m.variants.isNotEmpty) '${m.variants.length} sizes', ...priceTags(m), if (g != null) g].join(' · '),
                   style: ts(12, c: C.muted)),
             ]),
           ),
@@ -317,7 +317,7 @@ Future<void> showMenuItemSheet(BuildContext context, MenuItem? existing) {
           const SizedBox(height: 6),
           DropdownButtonFormField<String>(
             initialValue: s.categories.contains(cat) ? cat : null,
-            items: [for (final c in s.categories) DropdownMenuItem(value: c, child: Text(c, style: ts(14)))],
+            items: [for (final c in s.categoriesAz) DropdownMenuItem(value: c, child: Text(c, style: ts(14)))],
             onChanged: ro
                 ? null
                 : (v) => set(() {

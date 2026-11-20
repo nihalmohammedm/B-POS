@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/keys.dart';
 import '../widgets/receipt.dart';
+import 'dialogs.dart';
 import 'item_amend.dart';
 import 'payment.dart';
 
@@ -151,7 +152,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(s.titleOf(o), maxLines: 1, overflow: TextOverflow.ellipsis, style: ts(16, w: w5)),
             const SizedBox(height: 2),
-            Text('${o.type.label} · ${o.type == OrderType.dineIn ? '#${o.id}' : o.token}', style: ts(13, c: C.muted)),
+            Text('${o.kindLabel} · ${o.type == OrderType.dineIn ? '#${o.id}' : o.token}', style: ts(13, c: C.muted)),
           ])),
           SizedBox(
             width: 150,
@@ -161,6 +162,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
               Flexible(child: Text(st.label, overflow: TextOverflow.ellipsis, style: ts(14, c: C.ink2))),
             ]),
           ),
+          if (o.fastBilled && o.type == OrderType.takeaway) ...[
+            Btn.outline('Assign table',
+                icon: Icons.table_restaurant_outlined, height: 36, fontSize: 13, onTap: () => assignToTableFlow(context, s, o)),
+            const SizedBox(width: 12),
+          ],
           SizedBox(
               width: 56,
               child: Text('${m}m', textAlign: TextAlign.right, style: ts(14, c: late ? C.redInk : C.muted, w: late ? w6 : FontWeight.w400))),
@@ -169,6 +175,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
       ),
     );
   }
+}
+
+Future<void> assignToTableFlow(BuildContext context, Store s, Order o) async {
+  final r = await showTablePicker(context);
+  if (r == null || !context.mounted) return;
+  final t = s.table(r.$1);
+  final p = s.party(r.$1, r.$2);
+  final err = p == null ? 'Table not found' : s.assignToTable(o, t, p);
+  toast(context, err ?? '${o.kindLabel} order assigned to Table ${s.partyLabel(t, r.$2)}', error: err != null);
 }
 
 class OrderDetail extends StatelessWidget {
@@ -190,7 +205,8 @@ class OrderDetail extends StatelessWidget {
   (String, VoidCallback) _primary(BuildContext context, Store s, Order o, OrderStage st) {
     if (o.type == OrderType.dineIn) {
       if (st == OrderStage.billing) return ('Settle payment', () => settleFlow(context, o));
-      if (st == OrderStage.served) return ('Print bill', () => printBillFlow(context, o));
+      if (o.billed && o.isPaid && st == OrderStage.served) return ('Close table', () => settleFlow(context, o));
+      if (st == OrderStage.served && !o.billed) return ('Print bill', () => printBillFlow(context, o));
       return ('Mark served', () => s.markServed(o));
     }
     if (o.type == OrderType.takeaway) {
@@ -234,7 +250,7 @@ class OrderDetail extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${o.type.label} · ${o.type == OrderType.dineIn ? '#${o.id}' : o.token} · ${elapsed(o.at)}',
+            Text('${o.kindLabel} · ${o.type == OrderType.dineIn ? '#${o.id}' : o.token} · ${elapsed(o.at)}',
                 style: ts(13, c: C.muted)),
             const SizedBox(height: 4),
             Text(s.titleOf(o), style: ts(22, w: w5)),
@@ -296,6 +312,8 @@ class OrderDetail extends StatelessWidget {
                       reopenFlow(context, o);
                     case 'hold':
                       holdBillFlow(context, o);
+                    case 'assign':
+                      assignToTableFlow(context, s, o);
                     case 'cancel':
                       cancelOrderFlow(context, o);
                   }
@@ -307,6 +325,7 @@ class OrderDetail extends StatelessWidget {
                   if (_isSettleStage(o, st)) const PopupMenuItem(value: 'settle_no_print', child: Text('Settle without printing')),
                   if (o.billed && !o.isPaid && !o.held) const PopupMenuItem(value: 'reopen', child: Text('Reopen bill')),
                   if (o.type == OrderType.dineIn && !o.isPaid && !o.held) const PopupMenuItem(value: 'hold', child: Text('Hold bill')),
+                  if (o.fastBilled && o.type == OrderType.takeaway) const PopupMenuItem(value: 'assign', child: Text('Assign to table')),
                   PopupMenuItem(
                       value: 'cancel',
                       enabled: s.canCancel(o),

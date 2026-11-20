@@ -583,6 +583,9 @@ class SumRow extends StatelessWidget {
 }
 
 /// Price as shown on menu tiles and lists.
+/// Pricing flags worth showing next to an item: 'Open price' and/or 'Daily price'.
+List<String> priceTags(MenuItem m) => [if (m.openPrice) 'Open price', if (m.dailyPrice) 'Daily price'];
+
 String priceLabel(MenuItem m) => m.openPrice ? 'Price at order' : '${m.variants.isNotEmpty ? 'from ' : ''}${inr(m.fromPrice)}';
 
 /// Asks the price for one unit of an open-price item ([MenuItem.openPrice], e.g. fish

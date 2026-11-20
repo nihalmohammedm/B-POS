@@ -80,6 +80,8 @@ class SettledBillsScreen extends StatelessWidget {
               Text(s.titleOf(o), style: ts(15, w: w5)),
               const SizedBox(width: 8),
               Text(o.billNo ?? '', style: ts(13, c: C.muted)),
+              const SizedBox(width: 8),
+              Pill(o.type == OrderType.dineIn ? 'Served · Paid' : 'Handed over · Paid', bg: C.greenTint, fg: C.greenInk),
               if (o.complimentary) ...[const SizedBox(width: 8), const Pill('Complimentary', bg: C.skyTint, fg: C.skyInk)],
               if (o.refunded > 0) ...[
                 const SizedBox(width: 8),
